@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "name": "dsivio-video",
+  "version": "0.1.0",
+  "description": "参考视频复刻、分镜生成与成片合成",
+  "metadata": { "repository": "https://github.com/ZMGID/dsivio-plugins", "license": "MIT" }
+}

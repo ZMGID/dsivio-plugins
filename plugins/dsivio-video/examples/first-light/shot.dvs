@@ -1,0 +1,18 @@
+<?dvml using="dsivio-video/text/dvs@1"?>
+<sheet version="1">
+text-template.hero {
+  separator: paragraph;
+  default-camera: 缓慢推近;
+}
+text-template.hero.block.direction {
+  kind: slot;
+  order: 0;
+  slot: direction;
+}
+text-template.hero.block.camera {
+  kind: slot;
+  order: 1;
+  slot: camera;
+  label: 镜头运动：;
+}
+</sheet>

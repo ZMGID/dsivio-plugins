@@ -1,0 +1,18 @@
+<?dvml using="dsivio-video/markup@1"?>
+<dvml>
+  <import as="text" from="dsivio-video/text@1"/>
+  <import as="media" from="dsivio-video/media@1"/>
+  <import as="gen" from="dsivio-video/gen@1"/>
+  <import as="kit" source="./shot.dvs"/>
+  <media:Image id="product" src="./assets/product.png"/>
+  <text:Value id="direction">一瓶香水放在清晨窗台上，逆光，薄雾。</text:Value>
+  <text:Render id="hero-prompt" template={kit.hero}>
+    <text:Set name="direction" text={direction}/>
+    <text:Param name="camera" value="缓慢推近"/>
+  </text:Render>
+  <gen:Image id="hero" model="openai/gpt-image-2" prompt={hero-prompt} ratio="9:16">
+    <gen:Reference image={product}/>
+  </gen:Image>
+  <gen:Video id="shot" model="volcengine/doubao-seedance-2-5" prompt={hero-prompt}
+    first-frame={hero.image} duration="5" resolution="720p" ratio="9:16" audio="false"/>
+</dvml>
