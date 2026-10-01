@@ -1,0 +1,5 @@
+<?dvml using="dsivio-video/run@1"?>
+<dvrun version="1">
+  <author source="./main.dvml"/>
+  <target output="prompt"/>
+</dvrun>

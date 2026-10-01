@@ -4,9 +4,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DvError } from "../core/errors.ts";
 import { locateTool, runTool } from "../tools/index.ts";
+import { stopAsr } from "./service.ts";
 
 export const ASR_PROTOCOL = "dsivio-video.asr/1";
-export const ASR_SERVICE_VERSION = "0.1.0";
+export const ASR_SERVICE_VERSION = "0.2.0";
 export const WHISPERX_VERSION = "3.8.6";
 export const asrRoot = join(homedir(), ".dsivio-video", "asr");
 export const asrDirectory = join(asrRoot, ASR_SERVICE_VERSION);
@@ -51,6 +52,7 @@ export async function installAsr(options: { model?: string; languages?: string[]
   if (languages.length === 0 || languages.some((language) => !/^[a-z]{2,3}$/.test(language) || ["auto", "und"].includes(language))) throw new DvError("CLI_USAGE", "ASR languages must be lowercase two- or three-letter codes.");
   if (model.endsWith(".en") && languages.some((language) => language !== "en")) throw new DvError("CLI_USAGE", "English-only ASR models require languages: [en].");
   try {
+    const previous = await readAsrConfiguration();
     const python = await locateTool("python");
     await mkdir(asrDirectory, { recursive: true });
     const runOptions = { timeoutMs: 30 * 60_000, maxStdoutBytes: 16 * 1024 * 1024, onStderrLine: options.onProgress, onStdoutChunk: options.onProgress ? (chunk: Buffer) => options.onProgress!(chunk.toString("utf8").trimEnd()) : undefined };
@@ -61,6 +63,8 @@ export async function installAsr(options: { model?: string; languages?: string[]
     options.onProgress?.("Preparing ASR, alignment and sentence resources");
     const cache = join(asrDirectory, "cache");
     await runTool(asrPython, [join(asrSources, "prepare.py"), "--model", model, "--languages", ...languages, "--cache", cache], runOptions);
+    // Verify and stop the old service while its old configuration is still authoritative.
+    await stopAsr(previous);
     const config: AsrConfiguration = { model, languages, device: "cpu", compute: "int8", batchSize: 8, cache, serviceVersion: ASR_SERVICE_VERSION };
     const temporary = join(asrDirectory, `config-${process.pid}.json`);
     await writeFile(temporary, JSON.stringify(config) + "\n", { mode: 0o600 });

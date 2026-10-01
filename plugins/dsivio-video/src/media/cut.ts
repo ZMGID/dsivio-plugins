@@ -88,16 +88,16 @@ export async function cutMedia(path: string, to: string, options: CutOptions = {
       await runTool("ffmpeg", [...args, output]);
     } else await encodeIntervals(input, intervals, output, false);
     const measured = await probeMedia(output);
-    // Seconds are reported at millisecond precision, like every other media report.
+    // The cursor stays exact; only reported seconds are rounded to milliseconds.
     const ms = (value: number) => Math.round(value * 1000) / 1000;
     let cursor = 0;
     const nominalMap = intervals.map(interval => {
       const begin = cursor;
-      cursor = ms(cursor + interval.endSec - interval.startSec);
-      return { inputStartSec: interval.startSec, inputEndSec: interval.endSec, outputStartSec: begin, outputEndSec: cursor };
+      cursor += interval.endSec - interval.startSec;
+      return { inputStartSec: interval.startSec, inputEndSec: interval.endSec, outputStartSec: ms(begin), outputEndSec: ms(cursor) };
     });
     await publishFile(output, target);
-    return { outputPath: target, inputIntervals: intervals, nominalMap, requestedDuration: cursor, measuredDuration: measured.durationSec, videoPresent: measured.hasVideo, audioPresent: measured.hasAudio, timeLabelled: Boolean(options.labelTime), ...(intervals.length === 1 ? { startSec: intervals[0]!.startSec, endSec: intervals[0]!.endSec } : {}) };
+    return { outputPath: target, inputIntervals: intervals, nominalMap, requestedDuration: ms(cursor), measuredDuration: measured.durationSec, videoPresent: measured.hasVideo, audioPresent: measured.hasAudio, timeLabelled: Boolean(options.labelTime), ...(intervals.length === 1 ? { startSec: intervals[0]!.startSec, endSec: intervals[0]!.endSec } : {}) };
   } catch (error) {
     if (error instanceof DvError) throw error;
     throw new DvError("MEDIA_CUT_FAILED", `Cannot cut ${input.path} to ${target}: ${error instanceof Error ? error.message : String(error)}`, { cause: error, hint: "Check the target permissions and media container/codec compatibility." });

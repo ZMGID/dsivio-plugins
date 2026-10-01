@@ -1,0 +1,6 @@
+<?dvml using="dsivio-video/text/dvs@1"?>
+<sheet version="1">
+text-template.shot { separator: paragraph; default-camera: 固定机位; }
+text-template.shot.block.direction { kind: slot; order: 0; slot: direction; }
+text-template.shot.block.camera { kind: slot; order: 1; slot: camera; label: 镜头：; }
+</sheet>

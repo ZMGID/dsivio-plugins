@@ -5,14 +5,30 @@
   "description": "Agent-driven video authoring for Dsivio, Claude Code and Codex",
   "type": "module",
   "license": "MIT",
-  "bin": { "dsivio-video": "./bin/dsivio-video.mjs" },
-  "engines": { "node": ">=22.18" },
+  "bin": {
+    "dsivio-video": "./bin/dsivio-video.mjs"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --disable-warning=ExperimentalWarning \"src/**/*.test.ts\" \"test/**/*.test.ts\""
   },
   "dependencies": {
+    "@hyperframes/engine": "0.8.99",
+    "@hyperframes/producer": "0.8.99",
+    "@puppeteer/browsers": "3.2.3",
+    "puppeteer-core": "25.8.0",
     "sharp": "^0.34.5"
+  },
+  "overrides": {
+    "@hyperframes/core": "0.8.99",
+    "@hyperframes/parsers": "0.8.99",
+    "@hyperframes/lint": "0.8.99",
+    "@hyperframes/studio-server": "0.8.99",
+    "puppeteer": "25.8.0",
+    "puppeteer-core": "25.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",

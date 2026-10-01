@@ -1,0 +1,47 @@
+<?dvml using="dsivio-video/markup@1"?>
+<dvml>
+  <import as="script" from="dsivio-video/script@1"/>
+  <import as="space" from="dsivio-video/space@1"/>
+  <import as="program" from="dsivio-video/program@1"/>
+  <import as="media" from="dsivio-video/media@1"/>
+  <import as="pipeline" from="dsivio-video/pipeline@1"/>
+  <import as="align" from="dsivio-video/align@1"/>
+  <import as="time" from="dsivio-video/time@1"/>
+  <import as="fonts" from="dsivio-video/fonts@1"/>
+  <import as="sound" from="dsivio-video/sound@1"/>
+  <import as="performance" from="dsivio-video/performance@1"/>
+  <import as="typo" from="dsivio-video/typo@1"/>
+  <import as="film" from="dsivio-video/film@1"/>
+  <import as="render" from="dsivio-video/render@1"/>
+  <import as="look" source="./look.dvs"/>
+  <script:Script id="story"><silent/></script:Script>
+  <program:Clock id="clock" frame-rate="30"/>
+  <space:Canvas id="canvas" width="1080" height="1920"/>
+  <space:Frame id="picture" within={canvas} left="0%" top="0%" right="100%" bottom="100%"/>
+  <space:Frame id="title-box" within={canvas} left="8%" top="8%" right="92%" bottom="24%"/>
+  <media:Video id="shot" src="./assets/silent.mp4"/>
+  <pipeline:Normalize id="source" source={shot} clock={clock}
+    video="primary-moving" audio="none" span-authority="video"/>
+  <pipeline:Transform id="edited" source={source.media}>
+    <pipeline:Trim start-frame="15" end-frame-exclusive="105"/>
+    <pipeline:Retime speed="2" preserve-pitch="true"/>
+  </pipeline:Transform>
+  <align:SemanticTake id="take" narrative={story} segment={story.segment.silent} media={edited.media}/>
+  <time:Timeline id="timeline" clock={clock}><time:Take source={take.take}/></time:Timeline>
+  <fonts:Face id="face" family="noto-sans-sc" weight="700" style="normal"/>
+  <fonts:Stack id="font" font={face}/>
+  <sound:Style id="sound-style" gain="1"/>
+  <sound:Track id="sound" timeline={timeline}><sound:Use style={sound-style} during="program"/></sound:Track>
+  <performance:Style id="camera-style" frame={picture} appearance={look.performance.base}/>
+  <performance:Track id="camera" timeline={timeline} canvas={canvas}>
+    <performance:Use style={camera-style} during="program"/>
+  </performance:Track>
+  <typo:Style id="title-style" recipe={look.typo.title} font={font}/>
+  <typo:Track id="titles" timeline={timeline}>
+    <typo:Area id="edit-title" placement={title-box} style={title-style} during={story.segment.silent}>剪裁与变速，先于对齐</typo:Area>
+  </typo:Track>
+  <film:Film id="production" canvas={canvas} timeline={timeline} appearance={look.film.base}>
+    <film:Track source={sound.audio}/><film:Track source={camera.visual}/><film:Track source={titles.track}/>
+  </film:Film>
+  <render:Video id="delivery" composition={production.composition} timeline={timeline}/>
+</dvml>

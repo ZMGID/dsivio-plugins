@@ -26,9 +26,12 @@ import { mediaBoundariesCommand } from "./commands/media/boundaries.ts";
 import { mediaFetchCommand, mediaPrepareFetchCommand } from "./commands/media/fetch.ts";
 import { transcribeCommand } from "./commands/transcribe.ts";
 import { setupCommand } from "./commands/setup.ts";
+import { snapshotCommand } from "./commands/snapshot.ts";
+import { captureInstallCommand, captureRunCommand, captureScreenshotCommand } from "./commands/capture.ts";
 
 // Sampling options shared by `media frames`, `tile` and `tiles` (research 06 §2.4).
 const sampling = { at: "string", start: "string", end: "string", every: "string", around: "string", occurrence: "string", padding: "string", transcript: "string" } as const;
+const browserOptions = { viewport: "string", scale: "string", headed: "boolean", "timeout-ms": "string", browser: "string", channel: "string", "browser-version": "string", "browser-cache": "string", "browser-download-base-url": "string" } as const;
 
 interface Command extends CommandSpec { run: (options: CliOptions) => Promise<number> }
 const commands: Record<string, Command> = {
@@ -56,7 +59,11 @@ const commands: Record<string, Command> = {
   "media fetch": { usage: "media fetch <http(s)-url> --to <video>", min: 1, max: 1, options: { to: "string" }, run: mediaFetchCommand },
   "media prepare-fetch": { usage: "media prepare-fetch", min: 0, max: 0, run: mediaPrepareFetchCommand },
   transcribe: { usage: "transcribe <audio|video> --language <code> --to <transcript.json>", min: 1, max: 1, options: { language: "string", to: "string" }, run: transcribeCommand },
-  setup: { usage: "setup asr|status [--model <name>]", min: 1, max: 1, options: { model: "string" }, run: setupCommand },
+  setup: { usage: "setup asr|browser|fonts|status [--model <name>] [--kind render|capture|all]", min: 1, max: 1, options: { model: "string", kind: "string", "browser-download-base-url": "string" }, run: setupCommand },
+  snapshot: { usage: "snapshot [compiled.html|HTTP(S)-URL | --studio <base-URL>] (--at-frame <n,...> | --start-frame <n> --end-frame-exclusive <n> [--step-frames <n>]) --to <new-dir> [--grid CxR --cell <px>]", min: 0, max: 1, options: { studio: "string", "at-frame": "string", "start-frame": "string", "end-frame-exclusive": "string", "step-frames": "string", to: "string", grid: "string", cell: "string" }, run: snapshotCommand },
+  "capture screenshot": { usage: "capture screenshot <URL|local-HTML> --to <image> [--full-page | --selector <selector> | --clip x,y,w,h]", min: 1, max: 1, options: { ...browserOptions, to: "string", "full-page": "boolean", selector: "string", clip: "string", transparent: "boolean", "wait-for": "string", "wait-ms": "string" }, run: captureScreenshotCommand },
+  "capture run": { usage: "capture run <script.mjs> [browser options] -- [script arguments]", min: 1, max: 1, options: browserOptions, run: captureRunCommand },
+  "capture install-browser": { usage: "capture install-browser [--browser-version <exact-version>] [--browser-cache <directory>] [--browser-download-base-url <URL>]", min: 0, max: 0, options: { "browser-version": "string", "browser-cache": "string", "browser-download-base-url": "string" }, run: captureInstallCommand },
   _worker: { usage: "_worker --workspace <project>", min: 0, max: 0, run: workerCommand },
 };
 const commonHelp = "Common options: --json --verbose --color auto|always|never --no-color --debug --workspace <path> --asset-root <path> (repeatable) --limit <n> (default 20) --help";
@@ -64,8 +71,9 @@ export async function main(argv: string[]): Promise<number> {
   let help = "Help: dsivio-video --help";
   let options: CliOptions | undefined;
   try {
-    const name = argv[0] === "--version" ? "version" : argv[0] === "media" && argv[1] && !argv[1].startsWith("-") ? `media ${argv[1]}` : argv[0];
-    const rest = name?.startsWith("media ") ? argv.slice(2) : argv.slice(1);
+    const grouped = argv[0] === "media" || argv[0] === "capture";
+    const name = argv[0] === "--version" ? "version" : grouped && argv[1] && !argv[1].startsWith("-") ? `${argv[0]} ${argv[1]}` : argv[0];
+    const rest = grouped && name?.includes(" ") ? argv.slice(2) : argv.slice(1);
     if (!name || name === "--help" || name === "help") {
       const args = name === "help" && argv[1] && commands[argv[1]] ? [argv[1], "--help", ...argv.slice(2)] : null;
       if (args) return await main(args);
@@ -76,7 +84,9 @@ export async function main(argv: string[]): Promise<number> {
     const command = Object.hasOwn(commands, name) ? commands[name] : undefined;
     if (!command) throw new DvError("CLI_USAGE", `Unknown command ${name}.`);
     help = `Help: dsivio-video ${name} --help`;
-    options = parseOptions(rest, command);
+    const separator = name === "capture run" ? rest.indexOf("--") : -1;
+    options = parseOptions(separator >= 0 ? rest.slice(0, separator) : rest, command);
+    if (separator >= 0) options.positionals.push(...rest.slice(separator + 1));
     if (options.values.help) {
       result(options, { schema: "dsivio-video.help/1", command: name, usage: `dsivio-video ${command.usage}`, commonOptions: commonHelp }, [`Usage: dsivio-video ${command.usage}`, commonHelp]);
       return 0;

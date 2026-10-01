@@ -1,0 +1,65 @@
+<?dvml using="dsivio-video/markup@1"?>
+<dvml>
+  <import as="script" from="dsivio-video/script@1"/>
+  <import as="space" from="dsivio-video/space@1"/>
+  <import as="program" from="dsivio-video/program@1"/>
+  <import as="media" from="dsivio-video/media@1"/>
+  <import as="pipeline" from="dsivio-video/pipeline@1"/>
+  <import as="align" from="dsivio-video/align@1"/>
+  <import as="time" from="dsivio-video/time@1"/>
+  <import as="fonts" from="dsivio-video/fonts@1"/>
+  <import as="sound" from="dsivio-video/sound@1"/>
+  <import as="performance" from="dsivio-video/performance@1"/>
+  <import as="typo" from="dsivio-video/typo@1"/>
+  <import as="film" from="dsivio-video/film@1"/>
+  <import as="render" from="dsivio-video/render@1"/>
+  <import as="look" source="./look.dvs"/>
+
+  <script:Script id="story">
+    <intro><HOST>今天先把@{claim}时间与画面@{/claim}分开，再把它们合成一部影片。@{cut!}</intro>
+    <silent/>
+  </script:Script>
+  <space:Canvas id="canvas" width="1080" height="1920"/>
+  <space:Frame id="picture" within={canvas} left="0%" top="0%" right="100%" bottom="100%"/>
+  <space:Frame id="title-box" within={canvas} left="8%" top="8%" right="92%" bottom="24%"/>
+  <program:Clock id="clock" frame-rate="30"/>
+
+  <media:Video id="intro-shot" src="./assets/intro.mp4"/>
+  <media:Video id="silent-shot" src="./assets/silent.mp4"/>
+  <pipeline:Normalize id="intro-media" source={intro-shot} clock={clock}
+    video="primary-moving" audio="default" span-authority="video"/>
+  <pipeline:Normalize id="silent-media" source={silent-shot} clock={clock}
+    video="primary-moving" audio="none" span-authority="video"/>
+  <align:SemanticTake id="intro" narrative={story} segment={story.segment.intro}
+    media={intro-media.media} language="zh"/>
+  <align:SemanticTake id="silent" narrative={story} segment={story.segment.silent}
+    media={silent-media.media}/>
+  <time:Timeline id="timeline" clock={clock} end="content.end">
+    <time:Take id="opening" source={intro.take} at="0f"/>
+    <time:Take id="closing" source={silent.take} at="previous.end"/>
+  </time:Timeline>
+
+  <fonts:Face id="title-face" family="noto-sans-sc" weight="700" style="normal"/>
+  <fonts:Stack id="title-font" font={title-face}/>
+  <sound:Style id="spoken" gain="1"/>
+  <sound:Track id="voice" timeline={timeline}>
+    <sound:Use style={spoken} during="program"/>
+  </sound:Track>
+  <performance:Style id="a-roll" frame={picture} appearance={look.performance.base}/>
+  <performance:Track id="camera" timeline={timeline} canvas={canvas}>
+    <performance:Use style={a-roll} during="program"/>
+  </performance:Track>
+  <typo:Style id="headline" recipe={look.typo.title} font={title-font}/>
+  <typo:Track id="titles" timeline={timeline}>
+    <typo:Area id="claim-title" placement={title-box} style={headline}
+      during={story.selection.claim}>时间与画面，分别定义</typo:Area>
+    <typo:Area id="end-title" placement={title-box} style={headline}
+      during={story.segment.silent}>合成，是最后一步</typo:Area>
+  </typo:Track>
+  <film:Film id="production" canvas={canvas} timeline={timeline} appearance={look.film.base}>
+    <film:Track source={voice.audio}/>
+    <film:Track source={camera.visual}/>
+    <film:Track source={titles.track}/>
+  </film:Film>
+  <render:Video id="delivery" composition={production.composition} timeline={timeline}/>
+</dvml>

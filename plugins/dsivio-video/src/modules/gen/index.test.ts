@@ -24,6 +24,7 @@ function context() {
     operation(spec) { operations.push(spec); return {}; },
     asset(locator, type, mime) { assets.push({ locator, type, mime }); return ctx.record(null, { type, data: { $resource: locator, bytes: 4, mime: mime! } }, span); },
     fail(code, message, location) { throw new DvError(code, message, { span: location }); },
+    identity() {},
   };
   return { ctx, records, operations, assets, bindings };
 }

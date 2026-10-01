@@ -40,6 +40,8 @@ export interface RawElement {
   body: string;
   /** Offset of `body` in the file, so the owner can report precise spans. */
   bodyStart: number;
+  /** Line/column of `bodyStart`; add the newlines inside `body` to locate any later offset. */
+  bodySpan: SourceSpan;
   span: SourceSpan;
 }
 

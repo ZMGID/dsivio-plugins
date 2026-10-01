@@ -27,13 +27,16 @@ async function requestJson(url: string, options: RequestInit, limit: number): Pr
     try { value = JSON.parse(Buffer.concat(chunks).toString("utf8")); }
     catch (error) { throw new DvError("ASR_RESPONSE_INVALID", "ASR did not return valid JSON.", { cause: error }); }
     if (!response.ok) {
-      if (record(value) && record(value.error) && typeof value.error.code === "string" && typeof value.error.message === "string") throw new DvError(value.error.code, value.error.message, { hint: value.error.code === "RESOURCE_NOT_PREPARED" ? "Run dsivio-video setup asr." : "See the ASR service log." });
+      if (record(value) && record(value.error) && typeof value.error.code === "string" && typeof value.error.message === "string") throw new DvError(value.error.code, value.error.message, { hint: value.error.code === "RESOURCE_NOT_PREPARED" ? "Run dsivio-video setup asr." : value.error.code === "BUSY" ? "Wait for the active transcription or startup to finish, then retry." : "See the ASR service log." });
       throw new DvError("ASR_RESPONSE_INVALID", `ASR returned HTTP ${response.status} without an error object.`);
     }
     return value;
   } catch (error) {
     if (error instanceof DvError) throw error;
-    if (options.signal?.aborted) throw new DvError("ASR_TIMEOUT", "ASR request timed out or was interrupted.", { cause: error });
+    if (options.signal?.aborted) {
+      const timedOut = options.signal.reason instanceof Error && options.signal.reason.name === "TimeoutError";
+      throw new DvError(timedOut ? "ASR_TIMEOUT" : "ABORTED", timedOut ? "ASR request timed out." : "ASR request was interrupted.", { cause: error });
+    }
     throw new DvError("ASR_UNAVAILABLE", `Cannot contact local ASR service: ${String(error)}`, { cause: error });
   }
 }
@@ -41,6 +44,12 @@ export async function healthAsr(port: number, config: Pick<AsrConfiguration, "mo
   const value = await requestJson(`http://127.0.0.1:${port}/health`, { signal }, 64 * 1024);
   if (!record(value) || value.ok !== true || value.protocol !== ASR_PROTOCOL || value.serviceVersion !== ASR_SERVICE_VERSION || value.whisperxVersion !== WHISPERX_VERSION || value.model !== config.model || value.device !== config.device || value.compute !== config.compute || value.batchSize !== config.batchSize) throw new DvError("ASR_CONFIG_MISMATCH", "ASR health does not match the expected protocol, versions or execution configuration.", { hint: "Stop the old ASR service and run dsivio-video setup asr." });
   return { ok: true, protocol: ASR_PROTOCOL, serviceVersion: ASR_SERVICE_VERSION, whisperxVersion: WHISPERX_VERSION, ...config };
+}
+export async function shutdownAsr(port: number, config: Pick<AsrConfiguration, "model" | "device" | "compute" | "batchSize">): Promise<void> {
+  const signal = AbortSignal.timeout(10_000);
+  await healthAsr(port, config, signal);
+  const value = await requestJson(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal }, 64 * 1024);
+  if (!record(value) || value.ok !== true) throw new DvError("ASR_RESPONSE_INVALID", "ASR did not acknowledge idle shutdown.");
 }
 export function parseAsrReply(value: unknown): AsrReply {
   if (!record(value) || typeof value.language !== "string" || (!Array.isArray(value.segments) && !Array.isArray(value.words))) throw new DvError("ASR_RESPONSE_INVALID", "ASR reply must contain language and segments or words.");
@@ -54,8 +63,8 @@ export function parseAsrReply(value: unknown): AsrReply {
   });
   return { language: value.language, segments, ...(Array.isArray(value.words) ? { words: value.words.map(parseWord) } : {}) };
 }
-export async function transcribeAsr(port: number, config: Pick<AsrConfiguration, "model" | "device" | "compute" | "batchSize">, audioPath: string, language: string, timeoutMs = 600_000): Promise<{ health: AsrHealth; reply: AsrReply }> {
-  const signal = AbortSignal.timeout(timeoutMs);
+export async function transcribeAsr(port: number, config: Pick<AsrConfiguration, "model" | "device" | "compute" | "batchSize">, audioPath: string, language: string, timeoutMs = 600_000, abortSignal?: AbortSignal): Promise<{ health: AsrHealth; reply: AsrReply }> {
+  const signal = abortSignal ? AbortSignal.any([abortSignal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
   const health = await healthAsr(port, config, signal);
   const reply = parseAsrReply(await requestJson(`http://127.0.0.1:${port}/transcribe`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ audio_path: audioPath, language }), signal }, 64 * 1024 * 1024));
   return { health, reply };

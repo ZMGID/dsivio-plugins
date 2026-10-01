@@ -1,5 +1,6 @@
 """Loopback-only, single-inference WhisperX service (no runtime downloads)."""
 import argparse
+from dataclasses import replace
 import importlib.metadata
 import json
 import logging
@@ -14,9 +15,10 @@ import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PROTOCOL = "dsivio-video.asr/1"
-SERVICE_VERSION = "0.1.0"
+SERVICE_VERSION = "0.2.0"
 MAX_REQUEST = 64 * 1024
 MAX_AUDIO = 512 * 1024 * 1024
+SIMPLIFIED_CHINESE_PROMPT = "这是一段普通话语音，请用简体中文准确记录说话内容。"
 
 
 class ServiceError(Exception):
@@ -93,7 +95,14 @@ class Engine:
             self.aligner(language)
         audio = self.np.frombuffer(pcm, dtype="<i2").astype(self.np.float32) / 32768.0
         started = time.monotonic()
-        result = self.model.transcribe(audio, batch_size=self.args.batch_size, language=language)
+        # WhisperX exposes initial_prompt through its immutable faster-whisper
+        # options. The inference lock makes this request-scoped replacement safe.
+        original_options = self.model.options
+        self.model.options = replace(original_options, initial_prompt=SIMPLIFIED_CHINESE_PROMPT if language == "zh" else None)
+        try:
+            result = self.model.transcribe(audio, batch_size=self.args.batch_size, language=language)
+        finally:
+            self.model.options = original_options
         language = result["language"]
         if not result["segments"]:
             return {"language": language, "segments": []}
@@ -149,10 +158,11 @@ class Handler(BaseHTTPRequestHandler):
         args = self.server.engine.args
         self.reply(200, {"ok": True, "protocol": PROTOCOL, "serviceVersion": SERVICE_VERSION,
                          "whisperxVersion": importlib.metadata.version("whisperx"), "model": args.model,
-                         "device": args.device, "compute": args.compute, "batchSize": args.batch_size})
+                         "device": args.device, "compute": args.compute, "batchSize": args.batch_size,
+                         "busy": self.server.inference_lock.locked()})
 
     def do_POST(self):
-        if self.path != "/transcribe":
+        if self.path not in ("/transcribe", "/shutdown"):
             self.reply(404, {"error": {"code": "NOT_FOUND", "message": "Unknown endpoint"}})
             return
         acquired = False
@@ -178,6 +188,15 @@ class Handler(BaseHTTPRequestHandler):
                 request = json.loads(body, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
             except (ValueError, UnicodeError) as error:
                 raise ServiceError("INVALID_JSON", "Request is not valid JSON") from error
+            if self.path == "/shutdown":
+                if request != {}:
+                    raise ServiceError("INVALID_REQUEST", "Shutdown requires an empty JSON object")
+                acquired = self.server.inference_lock.acquire(blocking=False)
+                if not acquired:
+                    raise ServiceError("BUSY", "Cannot stop ASR while an inference is running", 503)
+                self.reply(200, {"ok": True})
+                self.server.stop_requested = True
+                return
             if not isinstance(request, dict) or "audio_path" not in request:
                 raise ServiceError("INVALID_REQUEST", "Request must contain audio_path")
             if set(request) - {"audio_path", "language"}:
@@ -199,7 +218,7 @@ class Handler(BaseHTTPRequestHandler):
             logging.exception("Inference failed")
             self.reply(500, {"error": {"code": "INFERENCE_FAILED", "message": "Inference failed; see the ASR service log"}})
         finally:
-            if acquired:
+            if acquired and not self.server.stop_requested:
                 self.server.last_activity = time.monotonic()
                 self.server.inference_lock.release()
 
@@ -226,10 +245,11 @@ def main():
     server.roots = [Path(root).resolve() for root in args.allow_root or [tempfile.gettempdir()]]
     server.inference_lock = threading.Lock()
     server.last_activity = time.monotonic()
+    server.stop_requested = False
     server.timeout = 1
     logging.info("Listening on 127.0.0.1:%s", server.server_port)
     try:
-        while server.inference_lock.locked() or time.monotonic() - server.last_activity < args.idle_seconds:
+        while not server.stop_requested and (server.inference_lock.locked() or time.monotonic() - server.last_activity < args.idle_seconds):
             server.handle_request()
     finally:
         server.server_close()

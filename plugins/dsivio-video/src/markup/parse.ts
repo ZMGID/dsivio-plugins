@@ -134,7 +134,7 @@ class Parser {
       const body = this.text.slice(bodyStart, match.index);
       this.cursor = match.index;
       this.close(opening.tag);
-      return { kind: "raw", tag: opening.tag, attributes: opening.attributes, body, bodyStart, span: spanAt(this.file, this.text, opening.start, this.cursor) };
+      return { kind: "raw", tag: opening.tag, attributes: opening.attributes, body, bodyStart, bodySpan: spanAt(this.file, this.text, bodyStart, match.index), span: spanAt(this.file, this.text, opening.start, this.cursor) };
     }
     const children: MarkupNode[] = [];
     if (!opening.selfClosing) {

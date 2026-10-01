@@ -1,0 +1,10 @@
+<?dvml using="dsivio-video/markup@1"?>
+<dvml>
+  <import as="text" from="dsivio-video/text@1"/>
+  <import as="kit" source="./prompt.dvs"/>
+  <text:Value id="direction">桌边一只暖色陶杯，晨光从左后方进入。</text:Value>
+  <text:Render id="prompt" template={kit.shot}>
+    <text:Set name="direction" text={direction}/>
+    <text:Param name="camera" value="近景，固定机位"/>
+  </text:Render>
+</dvml>

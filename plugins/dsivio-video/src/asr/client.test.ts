@@ -78,3 +78,13 @@ test("client rejects malformed success responses", async () => {
     await assert.rejects(transcribeAsr(port, config, "/tmp/a.wav", "en"), (error: unknown) => error instanceof DvError && error.code === "ASR_RESPONSE_INVALID");
   }, (path, response) => response.end(JSON.stringify(path === "/health" ? health : { language: "en", segments: [{ words: [] }] })));
 });
+
+test("caller cancellation interrupts inference without becoming a timeout", async () => {
+  const controller = new AbortController();
+  await fixture(async (port) => {
+    await assert.rejects(transcribeAsr(port, config, "/tmp/a.wav", "en", 600_000, controller.signal), (error: unknown) => error instanceof DvError && error.code === "ABORTED");
+  }, (path, response) => {
+    if (path === "/health") response.end(JSON.stringify(health));
+    else controller.abort();
+  });
+});

@@ -27,6 +27,8 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
   const usedModules = new Set<string>();
   const assetsByPath = new Map<string, { ref: ResourceRef; binding: Binding }>();
   const fail = (code: string, message: string, span: SourceSpan): never => { throw new DvError(code, message, { span }); };
+  // Public domain identities are unique across the whole closure; each source is compiled once, so a repeat claim is a real duplicate.
+  const identities = new Map<string, SourceSpan>();
   const validate = (value: Value, span: SourceSpan): void => {
     const hash = value.type.lastIndexOf("#");
     const owner = registry.findModule(value.type.slice(0, hash));
@@ -69,6 +71,12 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
     const ctx: ElaborationContext = {
       file,
       fail,
+      identity(kind, key, span) {
+        const claim = `${kind}\u0000${key}`;
+        const previous = identities.get(claim);
+        if (previous) fail("DUPLICATE_SOURCE_IDENTITY", `${kind} identity ${key} is already declared at ${previous.file}:${previous.line}:${previous.column}`, span);
+        identities.set(claim, span);
+      },
       lookup(name, span) { const binding = local.get(name) ?? imported.get(name); if (!binding) fail("MARKUP_REFERENCE", `Unknown reference ${name}`, span); return binding!; },
       record(name, value, span) {
         validate(value, span);

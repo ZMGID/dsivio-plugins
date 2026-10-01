@@ -85,6 +85,11 @@ export interface ElaborationContext {
   asset(locator: string, type: TypeRef, mime: string | undefined, span: SourceSpan): Binding;
   /** Throw a DvError at `span`. */
   fail(code: string, message: string, span: SourceSpan): never;
+  /**
+   * Claim a public domain identity (e.g. a Script's story id) for the whole source closure.
+   * Claiming the same kind+key from another element fails with DUPLICATE_SOURCE_IDENTITY, even across import aliases.
+   */
+  identity(kind: string, key: string, span: SourceSpan): void;
 }
 
 // ---------- Producers (deterministic steps) ----------
