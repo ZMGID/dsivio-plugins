@@ -35,7 +35,7 @@ export async function prepareProject(request:FrameCaptureRequest,ctx:ExecuteCont
   let html=document?.html??(input.kind==="html"?input.project.html:"");
   const omitted=new Set(document?.resources.filter(u=>u.required==="windows"&&!refs.includes(u.resource)).map(u=>u.resource.$resource)??[]);
   const transparent=await sharp({create:{width:1,height:1,channels:4,background:{r:0,g:0,b:0,alpha:0}}}).png().toBuffer();
-  html=html.replace(/dv-resource:\/\/([^\s"'<>\)]+)/g,(_m,id:string)=>{const key=decodeURIComponent(id);if(resources[key])return resources[key];if(omitted.has(key))return `data:image/png;base64,${transparent.toString("base64")}`;throw new DvError("RENDER_RESOURCE_MISSING",`Unmaterialized resource ${key}`);});
+  html=html.replace(/dv-resource:\/\/([^\s"'<>\),]+)/g,(_m,id:string)=>{const key=decodeURIComponent(id);if(resources[key])return resources[key];if(omitted.has(key))return `data:image/png;base64,${transparent.toString("base64")}`;throw new DvError("RENDER_RESOURCE_MISSING",`Unmaterialized resource ${key}`);});
   html=html.replace(/data-dv-src=/g,"src=");await writeFile(join(projectDir,"index.html"),html);
   return {projectDir,html,resources,domain,extent:size as RenderDocument["extent"]};
 }
@@ -59,25 +59,100 @@ export function parseHtmlDomain(html:string): Pick<HtmlProject,"domain"|"extent"
   return {domain:{axisKey:attr("data-composition-id"),clock,totalFrames,totalSamples48k:frameToSample48k(totalFrames,clock)},extent:{widthPx:numeric("data-width"),heightPx:numeric("data-height")}};
 }
 
+type ResourceMapper = (url: string) => string | undefined;
+
+function decodeAttribute(value: string): string {
+  const named: Record<string,string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
+  return value.replace(/&(?:#(x[0-9a-f]+|\d+)|(amp|quot|apos|lt|gt));/gi, (_match, numeric: string | undefined, name: string | undefined) => {
+    if (name) return named[name.toLowerCase()]!;
+    const code = numeric![0]!.toLowerCase() === "x" ? Number.parseInt(numeric!.slice(1),16) : Number(numeric);
+    return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : "\ufffd";
+  });
+}
+
+function rewriteCssUrls(css: string, map: ResourceMapper): string {
+  const tokens = /\/\*[\s\S]*?\*\/|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\burl\(\s*(?:"((?:\\[\s\S]|[^"\\])*)"|'((?:\\[\s\S]|[^'\\])*)'|((?:\\(?:[0-9a-f]{1,6}\s?|[^\r\n\f])|[^)\s\\])*))\s*\)/gi;
+  return css.replace(tokens, (token, double: string | undefined, single: string | undefined, unquoted: string | undefined) => {
+    const raw = double ?? single ?? unquoted;
+    if (raw === undefined) return token;
+    const url = raw.replace(/\\([0-9a-f]{1,6})(?:\r\n|[\t\n\f\r ])?|\\([\s\S])/gi, (_escape, hex: string | undefined, character: string | undefined) => {
+      if (!hex) return /[\r\n\f]/.test(character!) ? "" : character!;
+      const code = Number.parseInt(hex,16);
+      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : "\ufffd";
+    });
+    const replacement = map(url);
+    if (replacement === undefined) return token;
+    const start = /^url\(\s*["']?/i.exec(token)![0].length;
+    return token.slice(0,start) + replacement + token.slice(start + raw.length);
+  });
+}
+
+function rewriteSrcset(value: string, map: ResourceMapper): string {
+  let position = 0, copied = 0, result = "";
+  while (position < value.length) {
+    while (position < value.length && /[\t\n\f\r ,]/.test(value[position]!)) position++;
+    const start = position;
+    while (position < value.length && !/[\t\n\f\r ]/.test(value[position]!)) position++;
+    let end = position;
+    while (end > start && value[end-1] === ",") end--;
+    if (end === start) continue;
+    const replacement = map(value.slice(start,end));
+    if (replacement !== undefined) { result += value.slice(copied,start) + replacement; copied = end; }
+    if (end !== position) continue;
+    // Commas inside a descriptor's parentheses do not delimit candidates.
+    let parentheses = 0;
+    while (position < value.length) {
+      const character = value[position++]!;
+      if (character === "(") parentheses++;
+      else if (character === ")") parentheses = Math.max(0,parentheses-1);
+      else if (character === "," && !parentheses) break;
+    }
+  }
+  return result + value.slice(copied);
+}
+
+function rewriteHtmlResources(html: string, map: ResourceMapper): string {
+  const tags = /<!--[\s\S]*?-->|<(script|style|textarea|title|xmp|iframe|noembed|noframes|noscript)\b(?:[^<>"']|"[^"]*"|'[^']*')*>[\s\S]*?<\/\1\s*>|<[a-z][\w:-]*(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
+  return html.replace(tags, (token, block: string | undefined) => {
+    if (token.startsWith("<!--")) return token;
+    const opening = /^<[a-z][\w:-]*(?:[^<>"']|"[^"]*"|'[^']*')*>/i.exec(token)![0];
+    const tagName = /^<([\w:-]+)/.exec(opening)![1]!.toLowerCase();
+    const rewritten = opening.replace(/(?<=\s)([^\s"'<>/=]+)(\s*=\s*)(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g, (attribute, rawName: string, equals: string, double: string | undefined, single: string | undefined, unquoted: string | undefined) => {
+      const name = rawName.toLowerCase();
+      if (tagName === "script" && name === "src" || tagName === "link" && name === "href") throw new DvError("SNAPSHOT_EXTERNAL_CODE","Snapshot HTML must inline scripts and styles");
+      if (!["src","href","poster","srcset","data-dv-src","data-dv-source","style"].includes(name)) return attribute;
+      const decoded = decodeAttribute((double ?? single ?? unquoted)!);
+      const replacement = name === "srcset" ? rewriteSrcset(decoded,map) : name === "style" ? rewriteCssUrls(decoded,map) : map(decoded);
+      if (replacement === undefined || replacement === decoded) return attribute;
+      const quote = double !== undefined ? '"' : single !== undefined ? "'" : /[\t\n\f\r "'`=<>]/.test(replacement) ? '"' : "";
+      const escaped = replacement.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(quote === "'" ? /'/g : /"/g,quote === "'" ? "&#39;" : "&quot;");
+      return rawName + equals + quote + escaped + quote;
+    });
+    if (block?.toLowerCase() !== "style") return rewritten + token.slice(opening.length);
+    const closing = token.lastIndexOf("</");
+    return rewritten + rewriteCssUrls(token.slice(opening.length,closing),map) + token.slice(closing);
+  });
+}
+
 export async function localizeHtml(input:string,ctx:ExecuteContext):Promise<HtmlProject> {
   await mkdir(ctx.workDir,{recursive:true});
-  const base=/^https?:\/\//i.test(input)?new URL(input):pathToFileURL(resolve(input));
+  let base=/^https?:\/\//i.test(input)?new URL(input):pathToFileURL(resolve(input));
   let html:string;
   if(base.protocol==="file:")html=await readFile(fileURLToPath(base),"utf8");
-  else {const response=await fetch(base,{signal:ctx.signal});if(!response.ok)throw new DvError("SNAPSHOT_FETCH_FAILED",`HTTP ${response.status} loading HTML`);html=await response.text();}
+  else {const response=await fetch(base,{signal:ctx.signal});if(!response.ok)throw new DvError("SNAPSHOT_FETCH_FAILED",`HTTP ${response.status} loading HTML`);base=new URL(response.url);html=await response.text();}
   const shape=parseHtmlDomain(html);const resources:ResourceRef[]=[];
-  if(/<(?:script|link)\b[^>]*(?:src|href)\s*=/i.test(html))throw new DvError("SNAPSHOT_EXTERNAL_CODE","Snapshot HTML must inline scripts and styles");
   const urls=new Set<string>();
-  for(const match of html.matchAll(/\b(?:src|href|data-dv-src|data-dv-source)\s*=\s*["']([^"']+)["']|url\(\s*["']?([^"')]+)["']?\s*\)/gi))urls.add((match[1]??match[2])!);
+  rewriteHtmlResources(html,url=>{if(url&&!/^data:/i.test(url)&&!url.startsWith("#"))urls.add(url);return undefined;});
   const mimeByExtension:Record<string,string>={".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",".webp":"image/webp",".mp4":"video/mp4",".webm":"video/webm",".woff":"font/woff",".woff2":"font/woff2",".ttf":"font/ttf",".otf":"font/otf"};
+  const localized=new Map<string,string>();
   for(const url of urls){
-    if(url.startsWith("data:")||url.startsWith("#"))continue;
     const resolved=new URL(url,base);
     if(!["file:","http:","https:"].includes(resolved.protocol)||base.protocol!=="file:"&&resolved.protocol==="file:")throw new DvError("SNAPSHOT_RESOURCE_PROTOCOL",`Unsupported resource protocol ${resolved.protocol}`);
     const temporary=join(ctx.workDir,`localized-${resources.length}`);let mime:string|undefined;
     if(resolved.protocol==="file:"){mime=mimeByExtension[extname(resolved.pathname).toLowerCase()];if(!mime)throw new DvError("SNAPSHOT_RESOURCE_UNSUPPORTED",`Unsupported local resource ${url}`);await copyFile(fileURLToPath(resolved),temporary);}
     else {const response=await fetch(resolved,{signal:ctx.signal});if(!response.ok)throw new DvError("SNAPSHOT_FETCH_FAILED",`HTTP ${response.status} loading ${url}`);mime=response.headers.get("content-type")?.split(";")[0];if(!mime||!Object.values(mimeByExtension).includes(mime))throw new DvError("SNAPSHOT_RESOURCE_UNSUPPORTED",`Unsupported resource MIME ${mime}`);await writeFile(temporary,Buffer.from(await response.arrayBuffer()));}
-    const ref=await ctx.store.putFile(temporary,mime);resources.push(ref);html=html.split(url).join(`dv-resource://${encodeURIComponent(ref.$resource)}`);
+    const ref=await ctx.store.putFile(temporary,mime);resources.push(ref);localized.set(url,`dv-resource://${encodeURIComponent(ref.$resource)}`);
   }
+  html=rewriteHtmlResources(html,url=>localized.get(url));
   return {html,...shape,resources};
 }

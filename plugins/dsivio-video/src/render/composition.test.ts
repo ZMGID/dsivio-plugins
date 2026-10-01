@@ -12,6 +12,7 @@ import { locateTool, runTool } from "../tools/index.ts";
 import { inspectMedia } from "../pipeline/inspect.ts";
 import { selectStreams } from "../pipeline/select.ts";
 import { normalizeMedia } from "../pipeline/normalize.ts";
+import { transformMedia } from "../pipeline/transform.ts";
 import { materializeTake } from "../timeline/align.ts";
 import { parseScript } from "../timeline/script.ts";
 import { assembleTimeline } from "../timeline/timeline.ts";
@@ -24,6 +25,7 @@ import { performanceStyle, parseFrameInk } from "../components/performance/autho
 import { assemblePerformanceProgram } from "../components/performance/program.ts";
 import { composeComposition, flattenPresents, validateComposition } from "./composition.ts";
 import { sampleFrame } from "./validate.ts";
+import { mixAudio } from "./audio.ts";
 
 let directory: string;
 let timeline: Timeline;
@@ -117,4 +119,44 @@ test("empty presentation rules preserve explicit silent/audio-only programs and 
   const composition = composeComposition("silent", canvas, timeline, { background: "#101820" }, [], [voice]);
   assert.equal(composition.domain.totalSamples48k, frameToSample48k(90, timeline.clock));
   assert.throws(() => validateComposition({ ...composition, domain: { ...composition.domain, totalSamples48k: 1 } }), DvError);
+});
+test("fractional-FPS Use splits preserve one placement sample origin and native picture frames", async () => {
+  const workDir = join(directory, "fractional"); await mkdir(workDir);
+  const ctx: ExecuteContext = { buildId: "test", commandKey: "fractional", idempotencyKey: "fractional", projectRoot: directory, store: new ProjectStore(directory), workDir, signal: new AbortController().signal, log() {} };
+  const source = await ctx.store.putFile(join(directory, "source.mkv"), "video/x-matroska");
+  const inspection = await inspectMedia(source, ctx);
+  const normalized = await normalizeMedia({ selection: selectStreams(inspection, { video: "primary-moving", audio: "default", spanAuthority: "video" }), clock: { fps: { numerator: 30000, denominator: 1001 } } }, ctx);
+  const media = await transformMedia({ media: normalized, plan: { operations: [{ kind: "trim", frames: { start: 0, end: 2 } }] } }, ctx);
+  const script = parseScript("<shot/>", "fractional");
+  const take = materializeTake(script.narrative, script.segments.shot!, media);
+  const placed = assembleTimeline(media.clock, [take], { timelineKey: "fractional-axis", placements: [{ placementKey: "offset", at: "1f" }] });
+  const full = projectWindow(placed, { kind: "edges", start: "1f", end: "3f" }, "full");
+  const leading = projectWindow(placed, { kind: "edges", start: "1f", end: "2f" }, "leading");
+  const trailing = projectWindow(placed, { kind: "edges", start: "2f", end: "3f" }, "trailing");
+  const style = { styleKey: "unity", gain: 1, endGain: 1 };
+  const unsplit = lowerSound({ trackKey: "unsplit", timeline: placed, uses: [{ useKey: "full", window: full, style }] });
+  const split = lowerSound({ trackKey: "split", timeline: placed, uses: [{ useKey: "leading", window: leading, style }, { useKey: "trailing", window: trailing, style }] });
+  assert.deepEqual(split.clips.map(clip => clip.targetSamples), [{ start: 1602, end: 3203 }, { start: 3203, end: 4805 }]);
+  assert.deepEqual(split.clips.map(clip => clip.sourceSamples), [{ start: 0, end: 1601 }, { start: 1601, end: 3203 }]);
+  const domain = composeComposition("fractional", canvas, placed, { background: "#000000" }, [], [unsplit]).domain;
+  const pcm: Buffer[] = [];
+  for (const track of [unsplit, split]) {
+    const mixed = await mixAudio({ domain, tracks: [track], frames: { start: 0, end: 3 } }, ctx);
+    pcm.push((await runTool("ffmpeg", ["-v", "error", "-i", ctx.store.pathOf(mixed.resource), "-f", "s16le", "-"])).stdout);
+  }
+  assert.deepEqual(pcm[1], pcm[0], "splitting a Use must not omit or duplicate a PCM sample");
+  const pictureStyle = performanceStyle("picture", { canvasKey: canvas.canvasKey, rect: { xPx: 0, yPx: 0, ...canvas.extent } }, { "stack-order": 0 });
+  const pictures = lowerPerformance({ trackKey: "picture", timeline: placed, canvas, uses: [{ useKey: "leading", window: leading, style: pictureStyle }, { useKey: "trailing", window: trailing, style: pictureStyle }] });
+  const samples = pictures.presents.map(present => {
+    const node = present.nodes.find(item => item.kind === "video");
+    assert.ok(node?.kind === "video" && node.sampling);
+    return sampleFrame(node.sampling, 0);
+  });
+  assert.deepEqual(samples, [0, 1]);
+  const padded = assembleTimeline(media.clock, [take], { timelineKey: "padded-axis", placements: [{ placementKey: "offset", at: "4f" }] });
+  const paddedWindow = projectWindow(padded, { kind: "edges", start: "4f", end: "6f" }, "full");
+  const paddedTrack = lowerSound({ trackKey: "padded", timeline: padded, uses: [{ useKey: "full", window: paddedWindow, style }] });
+  assert.deepEqual(paddedTrack.clips[0]!.sourceSamples, { start: 0, end: 3203 });
+  assert.deepEqual(paddedTrack.clips[0]!.targetSamples, { start: 6406, end: 9610 });
+  composeComposition("padded", canvas, padded, { background: "#000000" }, [], [paddedTrack]);
 });

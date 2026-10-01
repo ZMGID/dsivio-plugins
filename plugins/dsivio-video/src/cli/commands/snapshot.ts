@@ -36,7 +36,7 @@ async function fetchBytes(url: URL, signal: AbortSignal): Promise<Buffer> {
     const response = await fetch(url, { signal });
     if (!response.ok) throw new DvError("SNAPSHOT_HTTP_FAILED", `Snapshot resource returned HTTP ${response.status}: ${url}`);
     return Buffer.from(await response.arrayBuffer());
-  } catch (cause) { if (cause instanceof DvError) throw cause; throw new DvError("SNAPSHOT_CONNECTION_FAILED", `Cannot load snapshot resource: ${url}`, { cause }); }
+  } catch (cause) { if (signal.aborted) throw new DvError("ABORTED", "Snapshot was cancelled.", { cause }); if (cause instanceof DvError) throw cause; throw new DvError("SNAPSHOT_CONNECTION_FAILED", `Cannot load snapshot resource: ${url}`, { cause }); }
 }
 export async function snapshotCommand(options: CliOptions): Promise<number> {
   const studio = stringOption(options, "studio"), source = options.positionals[0];
@@ -75,6 +75,7 @@ export async function snapshotCommand(options: CliOptions): Promise<number> {
     const frames = snapshotFrameList(options, domain.totalFrames);
     if (input.kind === "document") {
       for (const usage of input.document.resources) {
+        ctx.signal.throwIfAborted();
         if (usage.required === "windows" && !frames.some(frame => usage.frames.some(window => frame >= window.start && frame < window.end))) continue;
         const data = await fetchBytes(new URL(`/__studio/material/${encodeURIComponent(usage.resource.$resource)}`, studio!), ctx.signal);
         if (data.byteLength !== usage.resource.bytes) throw new DvError("RESOURCE_SIZE", "Studio material byte count differs from the document.");
@@ -84,15 +85,18 @@ export async function snapshotCommand(options: CliOptions): Promise<number> {
       }
     }
     const captured = await captureFrames({ input, frames }, ctx);
+    ctx.signal.throwIfAborted();
     if (captured.frames.length !== frames.length || captured.frames.some((item, index) => item.frame !== frames[index] || item.resource.mime !== "image/png")) throw new DvError("SNAPSHOT_FRAMES_MISMATCH", "Executor returned frames different from the exact request.");
     await mkdir(out);
     const report: { frame: number; seconds: number; path: string }[] = [];
     for (const item of captured.frames) {
+      ctx.signal.throwIfAborted();
       const name = `frame-${String(item.frame).padStart(9, "0")}.png`;
       const path = store.pathOf(item.resource);
       const image = await sharp(path).metadata();
       if (image.width !== extent.widthPx || image.height !== extent.heightPx || image.format !== "png") throw new DvError("SNAPSHOT_IMAGE_INVALID", "Captured PNG does not match the complete canvas.");
       await copyFile(path, join(out, name));
+      ctx.signal.throwIfAborted();
       report.push({ frame: item.frame, seconds: item.frame * domain.clock.fps.denominator / domain.clock.fps.numerator, path: join(target, name) });
     }
     const grids: string[] = [];
@@ -100,8 +104,10 @@ export async function snapshotCommand(options: CliOptions): Promise<number> {
       const aspect = extent.heightPx / extent.widthPx;
       const height = Math.max(1, Math.round(cell * aspect)), labelHeight = 30;
       for (let start = 0; start < report.length; start += columns * rows) {
+        ctx.signal.throwIfAborted();
         const page = report.slice(start, start + columns * rows), overlays: OverlayOptions[] = [];
         for (const [index, item] of page.entries()) {
+          ctx.signal.throwIfAborted();
           const image = await sharp(await readFile(join(out, `frame-${String(item.frame).padStart(9, "0")}.png`))).resize(cell, height).png().toBuffer();
           const left = (index % columns) * cell, top = Math.floor(index / columns) * (height + labelHeight);
           overlays.push({ input: image, left, top });
@@ -110,12 +116,15 @@ export async function snapshotCommand(options: CliOptions): Promise<number> {
         }
         const name = `grid-${String(grids.length + 1).padStart(3, "0")}.jpg`;
         await sharp({ create: { width: columns * cell, height: Math.ceil(page.length / columns) * (height + labelHeight), channels: 3, background: "#101820" } }).composite(overlays).jpeg().toFile(join(out, name));
+        ctx.signal.throwIfAborted();
         grids.push(join(target, name));
       }
     }
+    ctx.signal.throwIfAborted();
     await publishDirectory(out, target);
+    ctx.signal.throwIfAborted();
     result(options, { schema: "dsivio-video.snapshot/1", source: studio ? { kind: "studio", url: studio } : { kind: "html", input: source }, executor: "local/render-frames", frames: report, grids, target }, [`Captured ${report.length} frames and ${grids.length} grids to ${target}.`]);
     return 0;
-  } catch (cause) { if (cause instanceof DvError) throw cause; throw new DvError("SNAPSHOT_FAILED", "Snapshot failed.", { cause }); }
+  } catch (cause) { if (ctx.signal.aborted) throw new DvError("ABORTED", "Snapshot was cancelled.", { cause }); if (cause instanceof DvError) throw cause; throw new DvError("SNAPSHOT_FAILED", "Snapshot failed.", { cause }); }
   finally { process.removeListener("SIGINT", cancel); process.removeListener("SIGTERM", cancel); await rm(scratch, { recursive: true, force: true }); }
 }

@@ -21,6 +21,7 @@ export function runtimeSource(): string {
 function pageRuntime() {
   const win = window as unknown as BrowserWindow;
   const data = win.__dvDocument; const drawers: {draw:(frame:number)=>void;start:number;duration:number}[] = []; const animations:{animation:Animation;start:number;duration:number}[]=[];
+  const programs: { root: HTMLElement; program: Extract<VisualNode,{kind:"program"}>["program"]; start: number; duration: number }[] = [];
   win.__dvReady = (async () => {
     for (const present of data.presents) {
       const duration = present.lifetime.end-present.lifetime.start;
@@ -28,13 +29,23 @@ function pageRuntime() {
         const root = document.getElementById(entry.id)!; const node = entry.node;
         if(node.kind==="program"&&win.__dvRange&&(present.lifetime.end<=win.__dvRange.start||present.lifetime.start>=win.__dvRange.end))continue;
         if (["text","text-flow","path-text"].includes(String(node.kind))) { const mounted=await win.__dvText.mount(root,node,duration,data.clock); drawers.push({draw:mounted.seek,start:present.lifetime.start,duration}); }
-        if (node.kind === "program") { const program = node.program; if (program.setup) { const draw = new Function("root","data",program.setup)(root,program.data); if (typeof draw !== "function") throw new Error("Program setup must return a synchronous draw function"); drawers.push({draw,start:present.lifetime.start,duration}); } }
+        if (node.kind === "program" && node.program.setup) programs.push({root,program:node.program,start:present.lifetime.start,duration});
         const keys=node.keyframes;
         if (keys.length) { const span=Math.max(duration,keys[keys.length-1]!.offsetFrames); const keyframes=keys.map(k=>{const pose:Record<string,string|number>={offset:k.offsetFrames/span,easing:k.easing};for(const d of k.declarations)pose[d.property]=d.value;return pose;}); if(keys[keys.length-1]!.offsetFrames<span)keyframes.push({...keyframes[keyframes.length-1],offset:1}); const animation=root.animate(keyframes,{duration:span*1000*data.clock.fps.denominator/data.clock.fps.numerator,fill:"both"});animation.pause();animations.push({animation,start:present.lifetime.start,duration:span}); }
       }
     }
     await document.fonts.ready;
     for(const image of Array.from(document.images))if(image.src)await image.decode();
+    // Programs may inspect mounted descendant text and decorate its final seek state.
+    for (const pending of programs) {
+      const draw = new Function("root","data",pending.program.setup)(pending.root,pending.program.data);
+      if (typeof draw !== "function") throw new Error("Program setup must return a synchronous draw function");
+      drawers.push({draw,start:pending.start,duration:pending.duration});
+    }
+    if (programs.length) {
+      await document.fonts.ready;
+      for (const image of Array.from(document.images)) if (image.src) await image.decode();
+    }
     win.__dvSeekFrame(0);
   })();
   win.__dvSeekFrame=(frame:number)=>{

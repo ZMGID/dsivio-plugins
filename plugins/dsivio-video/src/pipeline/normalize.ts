@@ -55,7 +55,7 @@ export async function normalizeMedia(request: NormalizeRequest, ctx: ExecuteCont
     const alpha = stream.picture!.alpha; const output = join(ctx.workDir, alpha ? "picture.webm" : "picture.mp4");
     const fps = `${request.clock.fps.numerator}/${request.clock.fps.denominator}`;
     const filter = `setpts=PTS-STARTPTS,scale=round(iw*sar):ih,setsar=1,fps=${fps},tpad=stop_mode=clone:stop_duration=${totalFrames * request.clock.fps.denominator / request.clock.fps.numerator},trim=end_frame=${totalFrames},setpts=N/(${fps}*TB)`;
-    await runTool("ffmpeg", ["-v", "error", "-y", ...(alpha && stream.codec === "vp9" ? ["-c:v", "libvpx-vp9"] : []), "-i", input, "-map", `0:${selection.videoIndex}`, "-an", "-vf", filter, "-frames:v", String(totalFrames), ...pictureEncoding(alpha), output], { signal: ctx.signal });
+    await runTool("ffmpeg", ["-v", "error", "-y", ...(alpha && (stream.codec === "vp8" || stream.codec === "vp9") ? ["-c:v", stream.codec === "vp8" ? "libvpx" : "libvpx-vp9"] : []), "-i", input, "-map", `0:${selection.videoIndex}`, "-an", "-vf", filter, "-frames:v", String(totalFrames), ...pictureEncoding(alpha), output], { signal: ctx.signal });
     const extent = await verifyPicture(output, totalFrames, request.clock, alpha, ctx);
     media.picture = { resource: await ctx.store.putFile(output, alpha ? "video/webm" : "video/mp4"), extent, alpha: alpha ? "straight" : "opaque" };
   }

@@ -66,7 +66,8 @@ export type CaptionUnit = {
   tokenBounds: Bounds;
   attributes: Record<string, string | number | boolean>;
 };
-export type CaptionCue = { cueKey: string; segmentKey: string; turnKey: string; unitKeys: string[] };
+/** A cue belongs to exactly one Turn; role is authored metadata, never inferred from speech. */
+export type CaptionCue = { cueKey: string; segmentKey: string; turnKey: string; role?: string; unitKeys: string[] };
 export type CaptionDocument = { storyKey: string; units: CaptionUnit[]; cues: CaptionCue[] };
 export type Narrative = {
   storyKey: string;

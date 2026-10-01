@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseScript } from "./script.ts";
+import { validateCaptionDocument, validateNarrative } from "./validate.ts";
 
 test("Dual Text preserves pronunciation, N:M display, hidden speech, attributes and cues", () => {
   const s = parseScript('<intro><HOST>现在 <2018年{importance=2}|twenty eighteen>。|| <组件化|> < |spoken only></intro><silent/>', "story");
@@ -51,6 +52,16 @@ test("role state is local to each segment, and reserved escapes remain text", ()
   const s = parseScript('<a><HOST>Hello \\@image1 \\<literal> \\{x\\} \\| \\\\</a><b>Again</b>', "story");
   assert.equal(s.segmentTexts.a!.dialogue, "HOST: Hello @image1 <literal> {x} | \\");
   assert.equal(s.segmentTexts.b!.dialogue, "Again");
+});
+
+test("caption cues retain roles through cue breaks and omit roles in unlabelled turns", () => {
+  const n = parseScript('<a><HOST>first|| second<GUEST>third</a><b>fourth</b>', "story").narrative;
+  assert.deepEqual(n.captions.cues.map(cue => cue.role), ["HOST", "HOST", "GUEST", undefined]);
+  assert.equal(Object.hasOwn(n.captions.cues[3]!, "role"), false);
+  assert.deepEqual(n.captions.cues.map(cue => cue.unitKeys.length), [1, 1, 1, 1]);
+  assert.throws(() => validateCaptionDocument({ ...n.captions, cues: n.captions.cues.map((cue, index) => index ? cue : { ...cue, role: 42 }) }), { code: "TYPE_INVALID" });
+  assert.throws(() => validateCaptionDocument({ ...n.captions, cues: n.captions.cues.map((cue, index) => index ? cue : { ...cue, role: "" }) }), { code: "TYPE_INVALID" });
+  assert.throws(() => validateNarrative({ ...n, captions: { ...n.captions, cues: n.captions.cues.map((cue, index) => index ? cue : { ...cue, role: "GUEST" }) } }), { code: "TYPE_INVALID" });
 });
 
 test("structural markers retain segment/story edges even when token positions coincide", () => {

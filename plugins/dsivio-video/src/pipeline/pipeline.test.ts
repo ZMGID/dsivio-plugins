@@ -86,3 +86,35 @@ test("omitted trim ends resolve against each prior local step, including rounded
   assert.ok(request && typeof request === "object" && !Array.isArray(request));
   assert.deepEqual(request.plan, { operations: [{ kind: "trim", frames: { start: 3, end: 60 } }, { kind: "retime", speed: { numerator: 2, denominator: 1 }, preservePitch: true }, { kind: "trim", frames: { start: 1, end: 29 } }] });
 });
+
+test("seconds extraction rebases a stream that starts at ten seconds", async t => {
+  const ctx = await fixture(t); const path = join(ctx.workDir, "offset.mp4");
+  await runTool(await locateTool("ffmpeg"), ["-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=128x96:rate=30:duration=2", "-vf", "setpts=PTS+10/TB", "-vsync", "0", "-c:v", "libx264", path]);
+  const source = await ctx.store.putFile(path, "video/mp4");
+  const inspection = await inspectMedia(source, ctx);
+  assert.deepEqual(inspection.streams[0]!.timing!.startSeconds, { numerator: 10, denominator: 1 });
+  const byTime = await extractFrame({ source, streamIndex: 0, position: { kind: "seconds", value: { numerator: 1, denominator: 1 } } }, ctx);
+  const selectedPixels = await sharp(ctx.store.pathOf(byTime)).raw().toBuffer();
+  const byFrame = await extractFrame({ source, streamIndex: 0, position: { kind: "frame", index: 30 } }, ctx);
+  const wantedPixels = await sharp(ctx.store.pathOf(byFrame)).raw().toBuffer();
+  assert.ok(selectedPixels.equals(wantedPixels), "One local second must select the frame presented at eleven absolute seconds");
+  const initial = await extractFrame({ source, streamIndex: 0, position: { kind: "first" } }, ctx);
+  assert.ok(!selectedPixels.equals(await sharp(ctx.store.pathOf(initial)).raw().toBuffer()), "Local seconds must not accidentally select the first frame");
+});
+
+test("transparent VP8 retains alpha pixels when extracted and normalized", async t => {
+  const ctx = await fixture(t); const path = join(ctx.workDir, "alpha-vp8.webm");
+  await runTool(await locateTool("ffmpeg"), ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=blue@0.4:s=64x64:r=30:d=1,format=yuva420p", "-c:v", "libvpx", "-pix_fmt", "yuva420p", "-auto-alt-ref", "0", path]);
+  const source = await ctx.store.putFile(path, "video/webm");
+  const extracted = await extractFrame({ source, streamIndex: 0, position: { kind: "first" } }, ctx);
+  const original = await sharp(ctx.store.pathOf(extracted)).raw().toBuffer({ resolveWithObject: true });
+  assert.equal(original.info.channels, 4);
+  assert.ok(original.data[3]! > 0 && original.data[3]! < 255);
+  const inspection = await inspectMedia(source, ctx);
+  const media = await normalizeMedia({ selection: selectStreams(inspection, { video: "primary-moving", audio: "none", spanAuthority: "video" }), clock }, ctx);
+  const png = await extractFrame({ source: media.picture!.resource, streamIndex: 0, position: { kind: "first" } }, ctx);
+  const pixels = await sharp(ctx.store.pathOf(png)).raw().toBuffer({ resolveWithObject: true });
+  assert.equal(pixels.info.channels, 4);
+  assert.equal(pixels.data[3], original.data[3]);
+  assert.ok(pixels.data[2]! > 240);
+});

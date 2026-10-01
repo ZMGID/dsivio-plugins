@@ -31,7 +31,7 @@ export function parseRational(value: unknown, separator = "/"): Rational | undef
   const pieces = value.split(separator); if (pieces.length !== 2 || !/^-?\d+$/.test(pieces[0]!) || !/^\d+$/.test(pieces[1]!) || BigInt(pieces[1]!) === 0n) return undefined;
   return safeRational(BigInt(pieces[0]!), BigInt(pieces[1]!));
 }
-function tick(value: unknown): bigint | undefined {
+export function parseTimestampTick(value: unknown): bigint | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
   if (typeof value === "string" && /^-?\d+$/.test(value)) return BigInt(value);
   return undefined;
@@ -54,13 +54,13 @@ export async function inspectMedia(source: ResourceRef, ctx: ExecuteContext): Pr
     const stream: InspectedStream = { streamIndex: Number(item.index), kind, codec: String(item.codec_name ?? "unknown"), default: disposition?.default === 1, attachedPicture: disposition?.attached_pic === 1 };
     const frames = raw.frames.filter(f => { object(f); return f.stream_index === item.index; });
     const timeBase = parseRational(item.time_base);
-    const pts = frames.map(f => { object(f); return tick(f.best_effort_timestamp ?? f.pts); });
+    const pts = frames.map(f => { object(f); return parseTimestampTick(f.best_effort_timestamp ?? f.pts); });
     let timingValid = Boolean(timeBase && frames.length && pts.every(p => p !== undefined));
     const diffs: bigint[] = [];
     for (let i = 1; i < pts.length; i++) { if (pts[i] === undefined || pts[i - 1] === undefined) continue; const diff = pts[i]! - pts[i - 1]!; diffs.push(diff); if (diff <= 0n) timingValid = false; }
     const durations = frames.map((frame, i) => {
       object(frame);
-      const reported = tick(frame.duration ?? frame.pkt_duration);
+      const reported = parseTimestampTick(frame.duration ?? frame.pkt_duration);
       if (reported !== undefined && reported > 0n) return reported;
       if (kind === "audio" && timeBase && Number(item.sample_rate) > 0 && Number(frame.nb_samples) > 0) return BigInt(Number(frame.nb_samples)) * BigInt(timeBase.denominator) / (BigInt(Number(item.sample_rate)) * BigInt(timeBase.numerator));
       return i + 1 < pts.length && pts[i + 1] !== undefined && pts[i] !== undefined ? pts[i + 1]! - pts[i]! : diffs.at(-1);

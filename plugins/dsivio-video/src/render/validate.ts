@@ -96,7 +96,7 @@ export function validateDocument(data: unknown): asserts data is RenderDocument 
     validateSurface(surface);
     if (!refs.has(surface.resource.$resource)) invalid("Surface missing resource usage");
   }
-  for (const match of d.html.matchAll(/dv-resource:\/\/([^\s"'<>\)]+)/g)) {
+  for (const match of d.html.matchAll(/dv-resource:\/\/([^\s"'<>\),]+)/g)) {
     let id: string;
     try { id = decodeURIComponent(match[1]!); }
     catch { invalid("Malformed HTML resource placeholder"); }

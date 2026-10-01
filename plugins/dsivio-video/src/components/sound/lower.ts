@@ -21,10 +21,13 @@ export function lowerSound(program: SoundProgram): AudioTrack {
       const audible = subtractWindows(target, [...laterSources, ...laterUses]).map(piece => ({ start: boundary(piece.start), end: boundary(piece.end) })).filter(piece => piece.end > piece.start);
       const targetSamples = { start: boundary(target.start), end: boundary(target.end) };
       if (!audible.length || targetSamples.end <= targetSamples.start) continue;
+      // A placement has one sample origin. Re-rounding Use-local frames would shift
+      // source phase at fractional FPS; only the final padded tail can exceed the source.
+      const sourceOrigin = boundary(placement.offsetFrames);
       clips.push({
         clipKey: stableIdentity("sound-clip", { trackKey: program.trackKey, useKey: use.useKey, placementKey: placement.placementKey }),
         source: media.sound.resource, sourceTotalSamples: media.sound.totalSamples,
-        sourceSamples: { start: boundary(target.start - placement.offsetFrames), end: boundary(target.end - placement.offsetFrames) },
+        sourceSamples: { start: targetSamples.start - sourceOrigin, end: Math.min(media.sound.totalSamples, targetSamples.end - sourceOrigin) },
         targetSamples, speed: { numerator: 1, denominator: 1 }, preservePitch: true, gain: 1, fadeInSamples: 0, fadeOutSamples: 0,
         gainCurve: [{ sample: boundary(use.window.frames.start), gain: use.style.gain }, { sample: boundary(use.window.frames.end), gain: use.style.endGain }],
         audible,

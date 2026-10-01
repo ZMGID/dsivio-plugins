@@ -7,7 +7,17 @@ import { compileAuthor } from "../../elaborate/compile.ts";
 import { Workspace } from "../../source/workspace.ts";
 import script from "../script/index.ts";
 import program from "../program/index.ts";
-import time from "./index.ts";
+import time, { decodeInstantAttributes, decodeWindowAttributes } from "./index.ts";
+import type { InstantDecodeOptions } from "./index.ts";
+import { DvError } from "../../core/errors.ts";
+import type { ElaborationContext } from "../../core/module.ts";
+import type { Value } from "../../core/value.ts";
+import { parseMarkup } from "../../markup/parse.ts";
+import { parseScript } from "../../timeline/script.ts";
+import { assembleTimeline, parseClock } from "../../timeline/timeline.ts";
+import { projectInstant } from "../../timeline/temporal.ts";
+import { timelineTypes } from "../../timeline/types.ts";
+import type { SemanticTake } from "../../timeline/types.ts";
 import text from "../text/index.ts";
 
 function fixture(t: test.TestContext) {
@@ -52,4 +62,59 @@ test("time author forms reject mixed or unused bindings and malformed instant gr
 test("Script diagnostics carry actual source line and UTF16 offset", t => {
   const f = fixture(t); const path = f.source("main.dvml", `${f.imports}\n<script:Script id="story">\n<a>hel@{bad!}lo</a>\n</script:Script>`);
   assert.throws(() => f.compile(path), error => { assert.ok(error instanceof Error && "span" in error); const span = error.span; assert.ok(span && typeof span === "object" && "line" in span && "column" in span); assert.equal(span.line, 3); assert.equal(span.column, 7); return true; });
+});
+
+test("explicit shared Window declarations require a form, unlike default consumer windows", t => {
+  const f = fixture(t);
+  assert.throws(() => f.compile(f.source("main.dvml", `${f.imports}<time:Timeline id="timeline" frame-rate="30" end="30f"/><time:Window id="missing" timeline={timeline}/>`)), { code: "TIME_WINDOW_FORM_REQUIRED" });
+});
+
+test("shared instant decoding restricts origins and projects absolute, semantic and program points", () => {
+  const narrative = parseScript('<a>@{cue!}@{part}word@{/part}</a>', "story").narrative;
+  const segment = narrative.segments[0]!;
+  const token = narrative.tokens[0]!;
+  const clock = parseClock("30");
+  const take: SemanticTake = {
+    storyKey: narrative.storyKey, storyAnchors: narrative.storyAnchors, segment,
+    media: { clock, totalFrames: 30, picture: { resource: { $resource: "decoder-picture", bytes: 1, mime: "video/mp4" }, extent: { widthPx: 64, heightPx: 64 }, alpha: "opaque" } },
+    tokens: [{ tokenKey: token.tokenKey, frames: { start: 7, end: 9 } }],
+    anchorFrames: { [segment.anchors.start]: 0, [segment.anchors.end]: 30, [token.anchors.start]: 7, [token.anchors.end]: 9 },
+  };
+  const timeline = assembleTimeline(clock, [take], { timelineKey: "decoder-program", placements: [{ placementKey: "one", at: "4f" }] });
+  const references: Record<string, Value> = {
+    cue: { type: timelineTypes.moment, data: narrative.moments[0]! },
+    part: { type: timelineTypes.selection, data: narrative.selections[0]! },
+    segment: { type: timelineTypes.segment, data: segment },
+  };
+  const ctx: ElaborationContext = {
+    file: "instant.dvml", identity() {},
+    lookup(name, span) {
+      const value = references[name];
+      if (!value) throw new DvError("TIME_REFERENCE", "Unknown reference", { span });
+      return { kind: "record", key: name, type: value.type, value };
+    },
+    record() { throw new DvError("TEST_CONTEXT", "Decoder must not publish"); },
+    operation() { throw new DvError("TEST_CONTEXT", "Decoder must not execute"); },
+    asset() { throw new DvError("TEST_CONTEXT", "Decoder must not access media"); },
+    fail(code, message, span) { throw new DvError(code, message, { span }); },
+  };
+  const element = (attrs: string) => parseMarkup(ctx.file, `<?dvml using="dsivio-video/markup@1"?><dvml><import as="time" from="dsivio-video/time@1"/><time:Instant ${attrs}/></dvml>`, { isRaw: () => false }).body[0]!;
+  const decode = (attrs: string, options?: InstantDecodeOptions) => decodeInstantAttributes(element(attrs), ctx, options);
+  const terminalOrigins: InstantDecodeOptions = { allow: ["absolute", "moment"] };
+  assert.equal(projectInstant(timeline, decode('at="250ms"', terminalOrigins), "absolute").frame, 8);
+  assert.equal(projectInstant(timeline, decode('at={cue}', terminalOrigins), "moment").frame, 11);
+  assert.equal(projectInstant(timeline, decode('instant="moment.cue+2f" moment={cue}', terminalOrigins), "offset").frame, 13);
+  const selection = projectInstant(timeline, decode('at={part} boundary="end"', { allow: ["selection"] }), "selection");
+  assert.equal(selection.frame, 13);
+  assert.equal(selection.editAuthority, "semantic-anchor");
+  assert.equal(projectInstant(timeline, decode('at={segment} boundary="start"', { allow: ["segment"] }), "segment").frame, 4);
+  assert.equal(projectInstant(timeline, decode('instant="program.end-2f"', { allow: ["program"] }), "program").frame, 32);
+  for (const attrs of ['at={part} boundary="end"', 'at={segment} boundary="start"', 'instant="program.end"']) assert.throws(() => decode(attrs, terminalOrigins), { code: "TIME_ORIGIN" });
+  assert.throws(() => decode('at={part}'), { code: "TIME_ATTRIBUTE" });
+  assert.throws(() => decode('instant="moment.cue"'), { code: "TYPE_INVALID" });
+  assert.throws(() => decode('at="1f" instant="2f"'), { code: "TIME_FORM" });
+  assert.throws(() => decode('at="1f" boundary="start"'), { code: "TIME_FORM" });
+  assert.throws(() => decode('at="1f" moment={cue}'), { code: "TIME_BINDING" });
+  assert.throws(() => decode('instant="program.end+1f-2f"'), { code: "TYPE_INVALID" });
+  assert.deepEqual(decodeWindowAttributes(element(''), ctx), { kind: "during", source: "program" });
 });

@@ -1,4 +1,5 @@
 import { installAsr, asrStatus } from "../../asr/install.ts";
+import { installRaster, rasterStatus, rasterPython } from "../../raster/install.ts";
 import { DvError } from "../../core/errors.ts";
 import { locateTool, toolNames, toolVersion } from "../../tools/index.ts";
 import type { LocatedTool, ToolName } from "../../tools/types.ts";
@@ -12,7 +13,7 @@ import { stringOption } from "../options.ts";
 
 export async function setupCommand(options: CliOptions): Promise<number> {
   const action = options.positionals[0];
-  if (!["asr", "browser", "fonts", "status"].includes(action ?? "")) usage("setup requires asr, browser, fonts or status.");
+  if (!["asr", "browser", "fonts", "raster", "status"].includes(action ?? "")) usage("setup requires asr, browser, fonts, raster or status.");
   if (action !== "browser" && (options.values.kind !== undefined || options.values["browser-download-base-url"] !== undefined)) usage("--kind and --browser-download-base-url are only valid with setup browser.");
   if (action !== "asr" && options.values.model !== undefined) usage("--model is only valid with setup asr.");
   if (action === "browser") {
@@ -34,6 +35,11 @@ export async function setupCommand(options: CliOptions): Promise<number> {
     result(options, { schema: "dsivio-video.setup/1", asr: status }, [`ASR ready: ${status.path}`, `Model: ${status.model}`, `Languages: ${status.languages?.join(", ") ?? "none"}`]);
     return 0;
   }
+  if (action === "raster") {
+    const status = await installRaster({ onProgress: line => process.stderr.write(`${line}\n`) });
+    result(options, { schema: "dsivio-video.raster-setup/1", raster: status }, [`Raster ready: ${status.path}`, `OpenCV ${status.opencv}; NumPy ${status.numpy}; Python ${status.python.join(".")}`]);
+    return 0;
+  }
   const workspace = openWorkspace(options);
   const tools: (LocatedTool & { version: string } | { name: ToolName; path: null; source: null; error: string; hint?: string })[] = [];
   for (const name of toolNames) {
@@ -46,10 +52,18 @@ export async function setupCommand(options: CliOptions): Promise<number> {
     }
   }
   const asr = await asrStatus();
-  result(options, { schema: "dsivio-video.setup-status/1", tools, asr }, [
+  let raster;
+  try { raster = { ...await rasterStatus(), state: "ready" }; }
+  catch (error) {
+    if (!(error instanceof DvError)) throw error;
+    raster = { ready: false, state: error.code === "RASTER_VERSION_MISMATCH" ? "mismatch" : "down", path: rasterPython, error: error.message };
+  }
+  result(options, { schema: "dsivio-video.setup-status/1", tools, asr, raster }, [
     ...tools.map((tool) => `${tool.name}: ${tool.path !== null ? `${tool.version}; ${tool.path} (source: ${tool.source})` : `${tool.error}${tool.hint ? `; ${tool.hint}` : ""}`}`),
     `ASR: ${asr.ready ? "ready" : "not prepared"}; ${asr.path}${asr.model ? `; model: ${asr.model}` : ""}`,
     ...(asr.ready ? [] : ["Run dsivio-video setup asr to prepare local transcription."]),
+    `Raster: ${raster.state}; ${raster.path}${"opencv" in raster ? `; OpenCV ${raster.opencv}; NumPy ${raster.numpy}` : `; ${raster.error}`}`,
+    ...(raster.ready ? [] : ["Run dsivio-video setup raster to prepare local image processing."]),
   ]);
   return 0;
 }

@@ -26,7 +26,8 @@ export function validateTextFormat(value:unknown):asserts value is TextFormat {
  if(finite(d.sizePx,"font size",0)===0||finite(d.lineHeight,"line height",0)===0)throw new DvError("TYPE_INVALID","Font size and line height must be positive");
  for(const n of ["trackingPx","wordSpacingPx","baselineShiftPx","indentPx","paragraphBeforePx","paragraphAfterPx"])finite(d[n],n);
  if(!Number.isSafeInteger(d.tabSize)||Number(d.tabSize)<=0)throw new DvError("TYPE_INVALID","tabSize must be a positive integer");if(d.language!==undefined)key(d.language);
- for(const [n,values] of Object.entries({direction:["auto","ltr","rtl"],writingMode:["horizontal-tb","vertical-rl","vertical-lr"],kerning:["auto","normal","none"],synthesis:["none","weight","style","weight-style"],verticalAlign:["baseline","super","sub"],transform:["none","uppercase","lowercase","capitalize"],caps:["normal","small-caps","all-small-caps"],cjkSpacing:["normal","none"],punctuationTrim:["none","start","end","adjacent","all"]}))choice(d[n],values);
+ for(const [n,values] of Object.entries({direction:["auto","ltr","rtl"],writingMode:["horizontal-tb","vertical-rl","vertical-lr"],kerning:["auto","normal","none"],verticalAlign:["baseline","super","sub"],transform:["none","uppercase","lowercase","capitalize"],caps:["normal","small-caps","all-small-caps"],cjkSpacing:["normal","none"],punctuationTrim:["none","start","end","adjacent","all"]}))choice(d[n],values);
+ if(d.synthesis!=="none")throw new DvError("FONT_UNSUPPORTED","Exact static font faces do not allow synthesis");
  validateTextOpenType(d.axes,d.features);
  const paints=array(d.paints);paints.forEach(validatePaint);
  const visible=(paint:unknown):boolean=>{const p=object(paint);if(p.kind!=="fill"&&(p.kind!=="stroke"||Number(p.widthPx)===0))return false;const i=object(p.ink);if(i.kind==="solid")return String(i.color).length!==9||!String(i.color).endsWith("00");return array(i.stops).some(value=>{const stop=object(value);return Number(stop.opacity)>0&&(String(stop.color).length!==9||!String(stop.color).endsWith("00"));});};
@@ -126,32 +127,43 @@ function rectangleUnion(rectangles,radius) {
 }
 function ease(t,e) {return e==='ease-in'?t*t:e==='ease-out'?1-(1-t)*(1-t):e==='ease-in-out'?t<.5?2*t*t:1-2*(1-t)*(1-t):t;}
 function pose(poses,t) {let a=poses[0],b=poses.at(-1);if(t<=a.progress)return a.declarations;if(t>=b.progress)return b.declarations;for(let i=1;i<poses.length;i++)if(t<=poses[i].progress){a=poses[i-1];b=poses[i];break;}const v=ease((t-a.progress)/(b.progress-a.progress),b.easing);return b.declarations.map(d=>{const prev=a.declarations.find(p=>p.property===d.property)||d;if(d.property==='color'&&/^#[0-9a-f]{6,8}$/i.test(d.value)&&/^#[0-9a-f]{6,8}$/i.test(prev.value)){const ac=prev.value.slice(1).padEnd(8,'f'),bc=d.value.slice(1).padEnd(8,'f');let result='#';for(let k=0;k<8;k+=2)result+=Math.round(parseInt(ac.slice(k,k+2),16)*(1-v)+parseInt(bc.slice(k,k+2),16)*v).toString(16).padStart(2,'0');return{property:d.property,value:result};}const av=prev.value.match(/-?\d+(?:\.\d+)?/g)||[],bv=d.value.match(/-?\d+(?:\.\d+)?/g)||[];let index=0;return{property:d.property,value:av.length===bv.length?d.value.replace(/-?\d+(?:\.\d+)?/g,n=>String(Number(av[index++])*(1-v)+Number(n)*v)):v<1?prev.value:d.value};});}
-window.__dvText={async mount(root,node,lifetimeFrames,clock) {
+window.__dvText={rectangleUnion,async mount(root,node,lifetimeFrames,clock) {
  const flow=node.kind==='text'?{format:node.format,layout:{mode:'point',inlineSize:'hug',blockSize:'hug',align:'start',blockAlign:'start',paddingPx:[0,0,0,0],wrap:'none',overflow:'visible',columns:1,columnGapPx:0,metricEdge:'line-box',pointAnchor:{inline:'start',block:'start'},clip:false},paragraphs:[{paragraphKey:node.nodeKey,runs:[{kind:'run',runKey:node.nodeKey+'/run',text:node.text}]}],sequences:[]}:node.flow;
  const formats=[flow.format,...flow.paragraphs.flatMap(p=>[p.format,...p.runs.map(r=>r.format)].filter(Boolean))];
- const sample=flow.paragraphs.flatMap(p=>p.runs.filter(r=>r.kind==='run').map(r=>r.text)).join('');const loads=[];for(const f of formats)for(const face of f.fonts.faces){const name=family(face.faceKey);if(!Array.from(document.fonts).some(x=>x.family.replace(/^["']|["']$/g,'')===name))throw new Error('FONT_NOT_PREPARED: '+face.faceKey);loads.push(document.fonts.load(face.style+' '+face.weight+' '+f.sizePx+'px "'+name+'"',sample));}await Promise.all(loads);await document.fonts.ready;
- const container=document.createElement('div');root.replaceChildren(container);const l=flow.layout;Object.assign(container.style,{position:'relative',boxSizing:'border-box',width:l.inlineSize==='fixed'?'100%':'max-content',height:l.blockSize==='fixed'?'100%':'max-content',padding:l.paddingPx.map(px).join(' '),textAlign:l.align,whiteSpace:l.wrap==='none'?'pre':'pre-wrap',overflowWrap:l.wrap==='grapheme'?'anywhere':'normal',wordBreak:l.wrap==='grapheme'?'break-all':'normal',overflow:l.clip||l.overflow==='clip'?'hidden':'visible',columnCount:String(l.columns),columnGap:px(l.columnGapPx)});format(container,flow.format);
- const units={paragraph:[],run:[],word:[],grapheme:[],line:[]};const needsGraphemes=flow.sequences.some(s=>['grapheme','line'].includes(s.unit))||formats.some(f=>f.paints.some(p=>p.kind==='box'&&['grapheme','line'].includes(p.target)));
+ const sample=flow.paragraphs.flatMap(p=>p.runs.filter(r=>r.kind==='run').map(r=>r.text)).join('')+(flow.layout.overflow==='ellipsis'?'…':'');const loads=[];for(const f of formats)for(const face of f.fonts.faces){const name=family(face.faceKey);if(!Array.from(document.fonts).some(x=>x.family.replace(/^["']|["']$/g,'')===name))throw new Error('FONT_NOT_PREPARED: '+face.faceKey);loads.push(document.fonts.load(face.style+' '+face.weight+' '+f.sizePx+'px "'+name+'"',sample));}await Promise.all(loads);await document.fonts.ready;
+ const container=document.createElement('div');root.replaceChildren(container);const l=flow.layout;Object.assign(container.style,{position:'relative',boxSizing:'border-box',width:l.inlineSize==='fixed'?'100%':'max-content',height:l.blockSize==='fixed'?'100%':'max-content',padding:l.paddingPx.map(px).join(' '),textAlign:l.align,whiteSpace:l.wrap==='none'?'pre':'pre-wrap',overflowWrap:l.wrap==='grapheme'?'anywhere':'normal',wordBreak:l.wrap==='grapheme'?'break-all':'normal',overflow:l.clip||l.overflow==='clip'?'hidden':'visible',columnCount:l.columns>1?String(l.columns):'auto',columnGap:px(l.columnGapPx)});format(container,flow.format);
+ const units={paragraph:[],run:[],word:[],grapheme:[],line:[]};const needsGraphemes=l.overflow==='ellipsis'||flow.sequences.some(s=>['grapheme','line'].includes(s.unit))||formats.some(f=>f.paints.some(p=>p.kind==='box'&&['grapheme','line'].includes(p.target)));
  for(const p of flow.paragraphs){const paragraph=document.createElement('div');paragraph.dataset.paragraph=p.paragraphKey;const pf=p.format||flow.format;paragraph.__dvFormat=pf;format(paragraph,pf);container.append(paragraph);units.paragraph.push(paragraph);
   for(const r of p.runs){if(r.kind==='break'){paragraph.append(document.createElement('br'));continue;}const run=document.createElement('span');run.dataset.run=r.runKey;run.__dvFormat=r.format||pf;format(run,run.__dvFormat);paragraph.append(run);units.run.push(run);
    const words=Array.from(new Intl.Segmenter((r.format||pf).language,{granularity:'word'}).segment(r.text));
-   for(const word of words){const span=document.createElement('span');span.style.display='inline';span.__dvFormat=r.format||pf;run.append(span);units.word.push(span);if(needsGraphemes){for(const g of new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(word.segment)){const glyph=document.createElement('span');glyph.textContent=g.segment;glyph.style.display='inline-block';glyph.__dvFormat=r.format||pf;span.append(glyph);units.grapheme.push(glyph);}}else span.textContent=word.segment;}
+   for(const word of words){const span=document.createElement('span');span.style.display=l.wrap==='word'&&word.isWordLike?'inline-block':'inline';span.__dvFormat=r.format||pf;run.append(span);units.word.push(span);if(needsGraphemes){for(const g of new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(word.segment)){const glyph=document.createElement('span');glyph.textContent=g.segment;glyph.style.display='inline-block';glyph.__dvFormat=r.format||pf;span.append(glyph);units.grapheme.push(glyph);}}else span.textContent=word.segment;}
   }
  }
  // Derive line groups after the real font metrics have been applied.
- if(needsGraphemes){const groups=new Map();for(const glyph of units.grapheme){const rect=glyph.getBoundingClientRect();const group=Math.round(rect.top);if(!groups.has(group))groups.set(group,[]);groups.get(group).push(glyph);}units.line=Array.from(groups.values());}
+ if(needsGraphemes){const groups=new Map();for(const glyph of units.grapheme){const group=glyph.offsetTop;if(!groups.has(group))groups.set(group,[]);groups.get(group).push(glyph);}units.line=Array.from(groups.values());}
  const maxHeight=l.maxLines?l.maxLines*flow.format.sizePx*flow.format.lineHeight:Infinity;
- if(l.overflow==='ellipsis'){container.style.overflow='hidden';container.style.display='-webkit-box';container.style.webkitBoxOrient='vertical';container.style.webkitLineClamp=String(l.maxLines||Math.max(1,Math.floor(root.clientHeight/(flow.format.sizePx*flow.format.lineHeight))));}
+ if(l.overflow==='ellipsis'){
+  container.style.overflow='hidden';
+  const available=root.clientHeight-l.paddingPx[0]-l.paddingPx[2],lineHeight=flow.format.sizePx*flow.format.lineHeight;
+  const limit=Math.max(1,Math.min(l.maxLines||Infinity,Math.floor(available/lineHeight)));
+  if(units.line.length>limit){
+   const last=units.line[limit-1],ellipsis=last.at(-1),top=ellipsis.offsetTop,cut=units.grapheme.indexOf(ellipsis);
+   for(let index=cut+1;index<units.grapheme.length;index++)units.grapheme[index].remove();
+   ellipsis.textContent='…';ellipsis.dataset.dvEllipsis='true';
+   let preceding=cut-1;
+   while(ellipsis.offsetTop>top&&preceding>=0)units.grapheme[preceding--].remove();
+  }
+ }
  let scale=1;if(l.overflow==='shrink'){const availableW=root.clientWidth-l.paddingPx[1]-l.paddingPx[3],availableH=Math.min(root.clientHeight-l.paddingPx[0]-l.paddingPx[2],maxHeight);const sizes=[container,...units.paragraph,...units.run].map(el=>({el,size:parseFloat(el.style.fontSize)}));const setScale=value=>{for(const entry of sizes)entry.el.style.fontSize=px(entry.size*value);};const fits=()=>container.scrollWidth<=root.clientWidth+.5&&units.paragraph.reduce((height,p)=>height+p.getBoundingClientRect().height,0)<=availableH+.5;let low=l.minimumScale,high=1;if(!fits()){for(let i=0;i<16;i++){const candidate=(low+high)/2;setScale(candidate);if(fits())low=candidate;else high=candidate;}scale=low;setScale(scale);}container.style.overflow='hidden';}
  if(l.mode==='point'){const anchor={start:0,center:50,end:100};container.style.transform='translate(-'+anchor[l.pointAnchor.inline]+'%,-'+anchor[l.pointAnchor.block]+'%)';}else if(l.blockSize==='fixed'&&l.columns===1&&l.blockAlign!=='start'){const contentHeight=units.paragraph.reduce((sum,p)=>sum+p.getBoundingClientRect().height,0);const spare=Math.max(0,root.clientHeight-l.paddingPx[0]-l.paddingPx[2]-contentHeight);container.style.paddingTop=px(l.paddingPx[0]+spare*(l.blockAlign==='center'?.5:1));}
  if(node.kind!=='path-text'){
   const targets=needsGraphemes?units.grapheme:units.word;
   let painterIndex=0;
-  for(const source of targets){const f=source.__dvFormat;const paints=f.paints.filter(p=>p.kind!=='box');if(paints.length===1&&paints[0].kind==='fill'&&paints[0].ink.kind==='solid'&&!f.decorations.length)continue;
+  for(const source of targets){if(!source.isConnected)continue;const f=source.__dvFormat;const paints=f.paints.filter(p=>p.kind!=='box');if(paints.length===1&&paints[0].kind==='fill'&&paints[0].ink.kind==='solid'&&!f.decorations.length)continue;
    source.style.position='relative';source.style.display='inline-block';
    const svg=document.createElementNS(NS,'svg');svg.setAttribute('aria-hidden','true');Object.assign(svg.style,{position:'absolute',left:'0',top:'0',width:'100%',height:'100%',overflow:'visible',pointerEvents:'none'});source.append(svg);
    const prototype=document.createElementNS(NS,'text');prototype.textContent=source.childNodes[0].textContent;format(prototype,{...f,sizePx:f.sizePx*scale});svg.append(prototype);
-   const metrics=document.createElement('canvas').getContext('2d');metrics.font=getComputedStyle(source).font;const measured=metrics.measureText(prototype.textContent);const baseline=(source.getBoundingClientRect().height-measured.fontBoundingBoxAscent-measured.fontBoundingBoxDescent)/2+measured.fontBoundingBoxAscent;
+   const metrics=document.createElement('canvas').getContext('2d');metrics.font=getComputedStyle(source).font;const measured=metrics.measureText(prototype.textContent);const baseline=(source.offsetHeight-measured.fontBoundingBoxAscent-measured.fontBoundingBoxDescent)/2+measured.fontBoundingBoxAscent;
    prototype.setAttribute('x','0');prototype.setAttribute('y',String(baseline));svgGlyph(svg,prototype,f,family(node.nodeKey)+'_flow_'+painterIndex++);source.style.color='transparent';source.style.webkitTextStroke='0px transparent';source.style.textShadow='none';
   }
   container.__dvFormat=flow.format;
@@ -202,7 +214,33 @@ window.__dvText={async mount(root,node,lifetimeFrames,clock) {
    root.prepend(box);boxes.push(box);
   }
  }
- return {seek(frame){if(!Number.isSafeInteger(frame)||frame<0)throw new Error('TEXT_FRAME: local frame must be nonnegative integer');for(const [el,style]of baseStyles)el.setAttribute('style',style);for(const a of animations){const s=a.sequence;const elapsed=frame-s.startFrame-a.rank*s.staggerFrames;const progress=elapsed<0?0:elapsed>=s.durationFrames*s.cycles?1:(elapsed%s.durationFrames)/s.durationFrames;for(const el of a.elements){el.style.display='inline-block';for(const d of pose(s.poses,progress)){el.style.setProperty(d.property,d.value);if(d.property==='color'){el.style.webkitTextFillColor=d.value;for(const painted of el.querySelectorAll('[data-dv-fill=true]'))painted.setAttribute('fill',d.value);}}}}if(pathState){let margin=node.startMarginPx;if(node.marginKeys.length){const poses=node.marginKeys.map(k=>({progress:k.offsetFrames,easing:k.easing,declarations:[{property:'margin',value:String(k.marginPx)}]}));margin=Number(pose(poses,frame)[0].value);}let offset=margin+(pathState.total-margin-node.endMarginPx-pathState.width)*(node.align==='center'?.5:node.align==='end'?1:0);for(const g of pathState.glyphs){const distance=node.reverse?pathState.total-offset-g.width/2:offset+g.width/2;const a=pathState.path.getPointAtLength(Math.max(0,Math.min(pathState.total,distance)));const b=pathState.path.getPointAtLength(Math.max(0,Math.min(pathState.total,distance+.1)));const angle=node.orientation==='upright'?0:Math.atan2(b.y-a.y,b.x-a.x)*180/Math.PI+(node.reverse?180:0);g.el.setAttribute('transform','translate('+a.x+' '+a.y+') rotate('+angle+') translate('+(-g.width/2)+' '+(node.side==='left'?0:flow.format.sizePx)+')');g.el.style.visibility=node.overflow==='clip'&&(distance<margin||distance>pathState.total-node.endMarginPx)?'hidden':'visible';offset+=g.width;}}}};
+ const fillStates=new Map(Array.from(root.querySelectorAll('[data-dv-fill=true]'),el=>[el,el.getAttribute('fill')]));
+ return {seek(frame){
+  if(!Number.isSafeInteger(frame)||frame<0)throw new Error('TEXT_FRAME: local frame must be nonnegative integer');
+  for(const [el,style]of baseStyles)el.setAttribute('style',style);
+  for(const [el,fill]of fillStates)fill===null?el.removeAttribute('fill'):el.setAttribute('fill',fill);
+  for(const a of animations){
+   const s=a.sequence,elapsed=frame-s.startFrame-a.rank*s.staggerFrames;
+   const progress=elapsed<0?0:elapsed>=s.durationFrames*s.cycles?1:(elapsed%s.durationFrames)/s.durationFrames;
+   for(const el of a.elements){el.style.display='inline-block';for(const d of pose(s.poses,progress)){
+    el.style.setProperty(d.property,d.value);
+    if(d.property==='color'){el.style.webkitTextFillColor=d.value;for(const painted of el.querySelectorAll('[data-dv-fill=true]'))painted.setAttribute('fill',d.value);}
+   }}
+  }
+  if(pathState){
+   let margin=node.startMarginPx;
+   if(node.marginKeys.length){const poses=node.marginKeys.map(k=>({progress:k.offsetFrames,easing:k.easing,declarations:[{property:'margin',value:String(k.marginPx)}]}));margin=Number(pose(poses,frame)[0].value);}
+   let offset=margin+(pathState.total-margin-node.endMarginPx-pathState.width)*(node.align==='center'?.5:node.align==='end'?1:0);
+   for(const g of pathState.glyphs){
+    const distance=node.reverse?pathState.total-offset-g.width/2:offset+g.width/2;
+    const a=pathState.path.getPointAtLength(Math.max(0,Math.min(pathState.total,distance))),b=pathState.path.getPointAtLength(Math.max(0,Math.min(pathState.total,distance+.1)));
+    const angle=node.orientation==='upright'?0:Math.atan2(b.y-a.y,b.x-a.x)*180/Math.PI+(node.reverse?180:0);
+    g.el.setAttribute('transform','translate('+a.x+' '+a.y+') rotate('+angle+') translate('+(-g.width/2)+' '+(node.side==='left'?0:flow.format.sizePx)+')');
+    g.el.style.visibility=node.overflow==='clip'&&(distance<margin||distance>pathState.total-node.endMarginPx)?'hidden':'inherit';
+    offset+=g.width;
+   }
+  }
+ }};
 }};
 })();`;
 }

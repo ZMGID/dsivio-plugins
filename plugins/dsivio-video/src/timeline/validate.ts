@@ -40,7 +40,13 @@ export function validateCaptionDocument(data: unknown): asserts data is CaptionD
     if (units.has(u.unitKey)) invalid("Duplicate caption unit"); units.set(u.unitKey, u.tokenBounds);
   }
   const used: string[] = []; const cueKeys: string[] = [];
-  for (const item of d.cues) { const c = object(item); text(c.cueKey); text(c.segmentKey); text(c.turnKey); array(c.unitKeys); if (!c.unitKeys.length) invalid("Empty caption cue"); for (const key of c.unitKeys) { text(key); if (!units.has(key)) invalid("Unknown caption unit"); used.push(key); } cueKeys.push(c.cueKey); }
+  for (const item of d.cues) {
+    const c = object(item); text(c.cueKey); text(c.segmentKey); text(c.turnKey);
+    if (c.role !== undefined) text(c.role);
+    array(c.unitKeys); if (!c.unitKeys.length) invalid("Empty caption cue");
+    for (const key of c.unitKeys) { text(key); if (!units.has(key)) invalid("Unknown caption unit"); used.push(key); }
+    cueKeys.push(c.cueKey);
+  }
   unique(cueKeys, "caption cue"); unique(used, "caption cue unit"); if (used.length !== units.size || used.some((key, i) => key !== [...units.keys()][i])) invalid("Caption cues must cover units in author order");
 }
 export function validateNarrative(data: unknown): asserts data is Narrative {
@@ -78,7 +84,11 @@ export function validateNarrative(data: unknown): asserts data is Narrative {
   for (const m of n.moments) { validateMomentRef(m); if (m.storyKey !== n.storyKey || !anchors.has(m.anchorKey)) invalid("Moment references an unknown anchor"); names.push(m.momentKey); } unique(names, "semantic name");
   validateCaptionDocument(n.captions); if (n.captions.storyKey !== n.storyKey) invalid("Caption story mismatch");
   let end = 0; for (const u of n.captions.units) { if (u.tokenBounds.start !== end || u.tokenBounds.end > n.tokens.length) invalid("Caption units must partition tokens"); end = u.tokenBounds.end; } if (end !== n.tokens.length) invalid("Incomplete caption token coverage");
-  for (const cue of n.captions.cues) { for (const key of cue.unitKeys) { const unit = n.captions.units.find(u => u.unitKey === key)!; if (n.tokens.slice(unit.tokenBounds.start, unit.tokenBounds.end).some(t => t.segmentKey !== cue.segmentKey || t.turnKey !== cue.turnKey)) invalid("Caption cue ownership mismatch"); } }
+  for (const cue of n.captions.cues) {
+    const turn = n.turns.find(turn => turn.turnKey === cue.turnKey);
+    if (cue.role !== undefined && cue.role !== turn?.role) invalid("Caption cue role differs from its Turn");
+    for (const key of cue.unitKeys) { const unit = n.captions.units.find(u => u.unitKey === key)!; if (n.tokens.slice(unit.tokenBounds.start, unit.tokenBounds.end).some(t => t.segmentKey !== cue.segmentKey || t.turnKey !== cue.turnKey)) invalid("Caption cue ownership mismatch"); }
+  }
 }
 export function validateSynchronizedMedia(data: unknown): asserts data is SynchronizedMedia {
   const d = object(data); validateClockData(d.clock); integer(d.totalFrames, 1); if (!d.picture && !d.sound) invalid("Media requires picture or sound");

@@ -37,7 +37,7 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
   const addUnit = (text: string, separator: string, start: number, end: number, attributes: CaptionUnit["attributes"] = {}) => {
     if (start === end) fail("SCRIPT_DUAL_SPEECH", "Caption units require at least one spoken token");
     const unit: CaptionUnit = { unitKey: `unit:${narrative.captions.units.length}`, text, separator: start === turn!.tokenBounds.start ? "" : separator, tokenBounds: { start, end }, attributes }; narrative.captions.units.push(unit);
-    if (!cue) { cue = { cueKey: `cue:${narrative.captions.cues.length}`, segmentKey: segment!.segmentKey, turnKey: turn!.turnKey, unitKeys: [] }; narrative.captions.cues.push(cue); }
+    if (!cue) { cue = { cueKey: `cue:${narrative.captions.cues.length}`, segmentKey: segment!.segmentKey, turnKey: turn!.turnKey, ...(turn!.role !== undefined ? { role: turn!.role } : {}), unitKeys: [] }; narrative.captions.cues.push(cue); }
     cue.unitKeys.push(unit.unitKey); cueBreak = false; lastAttributed = false;
   };
   const bind = (source: string, entries: Marker[], matches: RegExpMatchArray[], start: number) => {
@@ -182,7 +182,9 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
     else { if (used.has(m.name)) fail(m.moment ? "SCRIPT_MOMENT_DUPLICATE" : "SCRIPT_SELECTION_DUPLICATE", `Duplicate semantic name '${m.name}'`, m.offset); used.add(m.name); if (m.moment) narrative.moments.push({ kind: "moment", storyKey: "pending", momentKey: m.name, anchorKey: m.anchor }); else open.set(m.name, m); }
   }
   if (open.size) fail("SCRIPT_SELECTION_UNCLOSED", "Unclosed Selection");
-  const storyKey = stableIdentity("story", { id, segments: narrative.segments, turns: narrative.turns, tokens: narrative.tokens, selections: narrative.selections, moments: narrative.moments, captions: narrative.captions, pronunciation: narrative.turns.map(t => (pronunciation.get(t) ?? "").replace(/\s+/gu, " ").trim()) });
+  // Cue role is a projection of Turn role, not a second authored identity input.
+  const captionsForIdentity = { ...narrative.captions, cues: narrative.captions.cues.map(cue => ({ cueKey: cue.cueKey, segmentKey: cue.segmentKey, turnKey: cue.turnKey, unitKeys: cue.unitKeys })) };
+  const storyKey = stableIdentity("story", { id, segments: narrative.segments, turns: narrative.turns, tokens: narrative.tokens, selections: narrative.selections, moments: narrative.moments, captions: captionsForIdentity, pronunciation: narrative.turns.map(t => (pronunciation.get(t) ?? "").replace(/\s+/gu, " ").trim()) });
   const identity = (key: string) => `${storyKey}:${key}`; narrative.storyKey = storyKey; narrative.captions.storyKey = storyKey;
   const remapPair = (p: AnchorPair) => { p.start = identity(p.start); p.end = identity(p.end); }; remapPair(narrative.storyAnchors);
   for (const s of narrative.segments) { s.storyKey = storyKey; s.segmentKey = identity(s.segmentKey); remapPair(s.anchors); }

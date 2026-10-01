@@ -7,10 +7,13 @@ import { entityIdentity } from "../../timeline/identity.ts";
 import { assembleTimeline, parseClock } from "../../timeline/timeline.ts";
 import { consumeWindow, isTimeLiteral, projectInstant, projectWindow } from "../../timeline/temporal.ts";
 import { timelineTypes } from "../../timeline/types.ts";
-import type { InstantExpression, PlacementPlan, SemanticRef, WindowExpression } from "../../timeline/types.ts";
+import type { InstantExpression, PlacementPlan, SemanticRef, TimeLiteral, WindowExpression } from "../../timeline/types.ts";
 import { object, text, validateClockData, validateInstant, validateMomentRef, validatePlacementPlan, validateSegmentRef, validateSelectionRef, validateSemanticTake, validateTimeline, validateWindow } from "../../timeline/validate.ts";
 
 export const WINDOW_ATTRIBUTES = ["during", "at", "until", "for", "start", "end", "selection", "segment", "moment", "start-source", "end-source", "window"] as const;
+export const INSTANT_ATTRIBUTES = ["at", "boundary", "instant", "selection", "segment", "moment"] as const;
+export type InstantOriginKind = "absolute" | "moment" | "selection" | "segment" | "program";
+export type InstantDecodeOptions = { allow?: readonly InstantOriginKind[] };
 function attributes(element: ElementNode | RawElement, ctx: ElaborationContext, allowed?: readonly string[]): Record<string, Attribute> {
   const result: Record<string, Attribute> = Object.create(null);
   for (const a of element.attributes) { if (Object.hasOwn(result, a.name) || allowed && !allowed.includes(a.name)) ctx.fail("TIME_ATTRIBUTE", `Unknown or duplicate attribute '${a.name}'`, a.span); result[a.name] = a; }
@@ -27,9 +30,48 @@ function semantic(attr: Attribute, ctx: ElaborationContext): SemanticRef {
   if (value.kind !== "record") ctx.fail("TIME_REFERENCE", "Semantic references must be static author values", attr.span);
   const data = value.value.data; if (value.type === timelineTypes.segment) validateSegmentRef(data); else if (value.type === timelineTypes.selection) validateSelectionRef(data); else validateMomentRef(data); return data;
 }
-function pointSource(attr: Attribute, ctx: ElaborationContext): InstantExpression["source"] {
+function pointSource(attr: Attribute, ctx: ElaborationContext): TimeLiteral | SemanticRef {
   if (attr.value.kind === "literal") { if (!isTimeLiteral(attr.value.text)) ctx.fail("TIME_LITERAL", "Point requires a single explicit-unit time literal", attr.span); return attr.value.text; }
   return semantic(attr, ctx);
+}
+
+/** Decodes one point without requiring a Timeline; consumers can whitelist semantic origins. */
+export function decodeInstantAttributes(element: ElementNode | RawElement, ctx: ElaborationContext, options: InstantDecodeOptions = {}): InstantExpression {
+  const attrs = attributes(element, ctx);
+  if (!!attrs.at === !!attrs.instant) ctx.fail("TIME_FORM", "Instant requires exactly one at or instant", element.span);
+  const named = ["selection", "segment", "moment"].filter(name => attrs[name]);
+  let expression: InstantExpression;
+  if (attrs.at) {
+    if (named.length) ctx.fail("TIME_BINDING", "at cannot have unused semantic bindings", element.span);
+    const source = pointSource(attrs.at, ctx);
+    if (typeof source === "string" || source.kind === "moment") {
+      if (attrs.boundary) ctx.fail("TIME_FORM", "Only ranges require boundary", element.span);
+      expression = { kind: "at", source };
+    } else {
+      const boundary = literal(attrs.boundary, "boundary", ctx, element.span);
+      if (boundary !== "start" && boundary !== "end") ctx.fail("TIME_FORM", "boundary requires start or end", element.span);
+      expression = { kind: "at-boundary", source, boundary };
+    }
+  } else {
+    if (attrs.boundary || named.length > 1) ctx.fail("TIME_BINDING", "Invalid expression bindings", element.span);
+    const source = named.length ? semantic(attrs[named[0]!]!, ctx) : undefined;
+    const authored = literal(attrs.instant, "instant", ctx, element.span);
+    if (source && source.kind !== named[0]) ctx.fail("TIME_BINDING", "Named binding has the wrong semantic type", element.span);
+    expression = { kind: "expression", expression: authored, ...(source ? { source } : {}) };
+  }
+  validateInstantExpression(expression);
+  const origin: InstantOriginKind = expression.kind === "at-boundary" ? expression.source.kind
+    : expression.kind === "at" ? typeof expression.source === "string" ? "absolute" : "moment"
+    : expression.source?.kind ?? (isTimeLiteral(expression.expression) ? "absolute" : "program");
+  if (options.allow && !options.allow.includes(origin)) ctx.fail("TIME_ORIGIN", `Instant origin '${origin}' is not permitted by this consumer`, element.span);
+  return expression;
+}
+
+export function publishInstant(timeline: Binding, expression: InstantExpression, consumerKey: string, ctx: ElaborationContext, span: SourceSpan, publicName?: string): Binding {
+  const parameter = ctx.record(null, { type: timelineTypes.instantExpression, data: expression }, span);
+  const consumer = ctx.record(null, { type: timelineTypes.consumerKey, data: consumerKey }, span);
+  const publish: Record<string, string> = publicName === undefined ? {} : { instant: publicName };
+  return ctx.operation({ producer: "dsivio-video/time@1#instant", inputs: { timeline, expression: parameter, consumer }, publish, label: consumerKey, span }).instant!;
 }
 /** Decodes only temporal attributes; caller owns its non-temporal whitelist. */
 export function decodeWindowAttributes(element: ElementNode | RawElement, ctx: ElaborationContext): WindowExpression | Binding {
@@ -110,17 +152,18 @@ const windowSurface: SurfaceDef = {
     const a = attributes(element, ctx, ["id", "timeline", ...WINDOW_ATTRIBUTES]);
     const id = literal(a.id, "id", ctx, element.span);
     if (!a.timeline) ctx.fail("TIME_REFERENCE", "Window requires timeline", element.span);
+    if (!WINDOW_ATTRIBUTES.some(name => a[name])) ctx.fail("TIME_WINDOW_FORM_REQUIRED", "A shared Window declaration requires an explicit temporal form", element.span);
     publishWindow(binding(a.timeline, [timelineTypes.timeline], ctx), decodeWindowAttributes(element, ctx), entityIdentity(ctx.file, id), ctx, element.span, id);
   },
 };
 const instantSurface: SurfaceDef = {
   mode: "structured", doc: { summary: "Projects one point; Segment/Selection at requires an explicit boundary.", attributes: ["id", "timeline", "at", "boundary", "instant", "selection", "segment", "moment"].map(name => ({ name, required: name === "id" || name === "timeline", accepts: name === "timeline" ? timelineTypes.timeline : "literal or semantic reference", summary: "at plus optional boundary, or instant expression and its used binding." })), outputs: [{ name: "", type: timelineTypes.instant, summary: "Instant with provenance." }] },
   elaborate(element, ctx: ElaborationContext) {
-    if (element.kind !== "element" || element.children.some(c => c.kind !== "text" || c.text.trim())) ctx.fail("TIME_CHILD", "Instant must be empty", element.span); const a = attributes(element, ctx, ["id", "timeline", "at", "boundary", "instant", "selection", "segment", "moment"]); const id = literal(a.id, "id", ctx, element.span); if (!a.timeline || !!a.at === !!a.instant) ctx.fail("TIME_FORM", "Instant requires timeline and exactly one at or instant", element.span); let expression: InstantExpression;
-    const named = ["selection", "segment", "moment"].filter(k => a[k]);
-    if (a.at) { if (named.length) ctx.fail("TIME_BINDING", "at cannot have unused semantic bindings", element.span); const source = pointSource(a.at, ctx); if (typeof source === "string" || source?.kind === "moment") { if (a.boundary) ctx.fail("TIME_FORM", "Only ranges require boundary", element.span); expression = { kind: "at", source }; } else { const boundary = literal(a.boundary, "boundary", ctx, element.span); if (boundary !== "start" && boundary !== "end") ctx.fail("TIME_FORM", "boundary requires start or end", element.span); expression = { kind: "at-boundary", source: source!, boundary }; } }
-    else { if (a.boundary || named.length > 1) ctx.fail("TIME_BINDING", "Invalid expression bindings", element.span); const source = named.length ? semantic(a[named[0]!]!, ctx) : undefined; const value = literal(a.instant, "instant", ctx, element.span); if (source && (!value.startsWith(`${source.kind}.`) || source.kind !== named[0])) ctx.fail("TIME_BINDING", "Unused or wrong expression binding", element.span); expression = { kind: "expression", expression: value, ...(source ? { source } : {}) }; }
-    const parameter = ctx.record(null, { type: timelineTypes.instantExpression, data: expression }, element.span); const consumer = ctx.record(null, { type: timelineTypes.consumerKey, data: entityIdentity(ctx.file, id) }, element.span); ctx.operation({ producer: "dsivio-video/time@1#instant", inputs: { timeline: binding(a.timeline, [timelineTypes.timeline], ctx), expression: parameter, consumer }, publish: { instant: id }, label: id, span: element.span });
+    if (element.kind !== "element" || element.children.some(child => child.kind !== "text" || child.text.trim())) ctx.fail("TIME_CHILD", "Instant must be empty", element.span);
+    const attrs = attributes(element, ctx, ["id", "timeline", ...INSTANT_ATTRIBUTES]);
+    const id = literal(attrs.id, "id", ctx, element.span);
+    if (!attrs.timeline) ctx.fail("TIME_FORM", "Instant requires a Timeline", element.span);
+    publishInstant(binding(attrs.timeline, [timelineTypes.timeline], ctx), decodeInstantAttributes(element, ctx), entityIdentity(ctx.file, id), ctx, element.span, id);
   },
 };
 const timeModule: ModuleDef = {

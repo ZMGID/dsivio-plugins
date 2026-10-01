@@ -17,6 +17,7 @@ test("precise primary font weight is retained and explicit mismatch fails",()=>{
  const style=makeStyle("s",48,"#ffffff");assert.equal(style.format.fonts.faces[0]?.weight,700);
  assert.throws(()=>typographyStyle("s",{rule:"typo.test",properties:{"stack-order":1,size:48,fill:"#FFFFFF",weight:400}},face,extra),{code:"TYPO_FONT_CONFLICT"});
  assert.throws(()=>typographyStyle("s",{rule:"typo.test",properties:{"stack-order":1,size:48,fill:"#FFFFFF",axes:[]}},face,extra),{code:"TYPO_RECIPE"});
+ assert.throws(()=>typographyStyle("s",{rule:"typo.test",properties:{"stack-order":1,size:48,fill:"#FFFFFF",synthesis:"weight"}},face,extra),{code:"FONT_UNSUPPORTED"});
 });
 test("rich run styles completely replace format without changing parent layout or layer",()=>{
  const plan:TypographyAuthorPlan={trackKey:"track",items:[{itemKey:"item",windowIndex:0,styleIndex:0,placement:{kind:"area",index:0},content:{kind:"paragraphs",paragraphs:[{paragraphKey:"p",runs:[{kind:"run",runKey:"r1",text:"时间"},{kind:"break"},{kind:"run",runKey:"r2",text:"画面",styleIndex:1}]}]}}]};

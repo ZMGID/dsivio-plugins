@@ -4,7 +4,7 @@ import type { ResourceRef } from "../core/value.ts";
 import { DvError } from "../core/errors.ts";
 import type { ExtractAudioRequest, ExtractFrameRequest, NormalizedAudio, StillVideoRequest } from "./types.ts";
 import { runTool } from "../tools/index.ts";
-import { readProbe, inputPath } from "./inspect.ts";
+import { readProbe, inputPath, parseRational, parseTimestampTick } from "./inspect.ts";
 import { verifyAudio, verifyPicture, pictureEncoding } from "./normalize.ts";
 import { resource, validateAudioOptions, validateFrameOptions, integer, clock, object } from "./validate.ts";
 
@@ -26,11 +26,23 @@ export async function extractFrame(request: ExtractFrameRequest, ctx: ExecuteCon
   object(stream);
   const frames = raw.frames.filter(f => { object(f); return f.stream_index === request.streamIndex; });
   const position = request.position;
-  let index = position.kind === "first" ? 0 : position.kind === "last" ? frames.length - 1 : position.kind === "frame" ? position.index : frames.findIndex(f => { object(f); return Number(f.best_effort_timestamp_time ?? f.pts_time) >= position.value.numerator / position.value.denominator; });
+  let index: number;
+  if (position.kind === "seconds") {
+    const timeBase = parseRational(stream.time_base);
+    if (!timeBase || timeBase.numerator <= 0 || !frames.length) throw new DvError("EXTRACT_TIME_INVALID", "Seconds extraction requires decoded timestamps and a positive stream time base");
+    const first = frames[0]; object(first);
+    const origin = parseTimestampTick(first.best_effort_timestamp ?? first.pts);
+    if (origin === undefined) throw new DvError("EXTRACT_TIME_INVALID", "Selected stream has no exact first presentation timestamp");
+    index = frames.findIndex(frame => {
+      object(frame); const timestamp = parseTimestampTick(frame.best_effort_timestamp ?? frame.pts);
+      if (timestamp === undefined) throw new DvError("EXTRACT_TIME_INVALID", "Selected frame has no exact presentation timestamp");
+      return (timestamp - origin) * BigInt(timeBase.numerator) * BigInt(position.value.denominator) >= BigInt(position.value.numerator) * BigInt(timeBase.denominator);
+    });
+  } else index = position.kind === "first" ? 0 : position.kind === "last" ? frames.length - 1 : position.index;
   if (index < 0 || index >= frames.length) throw new DvError("EXTRACT_FRAME_RANGE", "Requested frame does not exist");
   const output = join(ctx.workDir, "extracted.png");
   const tags = stream.tags; if (tags !== undefined) object(tags);
-  await runTool("ffmpeg", ["-v", "error", "-y", ...(stream.codec_name === "vp9" && (tags?.alpha_mode === "1" || tags?.ALPHA_MODE === "1") ? ["-c:v", "libvpx-vp9"] : []), "-i", await inputPath(request.source, ctx), "-map", `0:${request.streamIndex}`, "-an", "-vf", `select=eq(n\\,${index}),scale=round(iw*sar):ih,setsar=1`, "-frames:v", "1", "-c:v", "png", output], { signal: ctx.signal });
+  await runTool("ffmpeg", ["-v", "error", "-y", ...((stream.codec_name === "vp8" || stream.codec_name === "vp9") && (tags?.alpha_mode === "1" || tags?.ALPHA_MODE === "1") ? ["-c:v", stream.codec_name === "vp8" ? "libvpx" : "libvpx-vp9"] : []), "-i", await inputPath(request.source, ctx), "-map", `0:${request.streamIndex}`, "-an", "-vf", `select=eq(n\\,${index}),scale=round(iw*sar):ih,setsar=1`, "-frames:v", "1", "-c:v", "png", output], { signal: ctx.signal });
   const check = await readProbe(output, ctx.signal);
   if (!Array.isArray(check.frames) || check.frames.length !== 1 || !Array.isArray(check.streams) || check.streams.length !== 1) throw new DvError("EXTRACT_FRAME_INVALID", "PNG must decode exactly one frame");
   return ctx.store.putFile(output, "image/png");

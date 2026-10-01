@@ -22,7 +22,7 @@ export const USE_ATTRIBUTES: AttributeDoc[] = [
   ...["start-source", "end-source", "selection", "segment", "moment"].map(name => ({ name, required: false, accepts: "semantic reference", summary: "Required semantic binding for edge expression; unused bindings forbidden." })),
 ];
 const sound: ModuleDef = {
-  id: "dsivio-video/sound@1", summary: "Ordered presentation rules for existing Timeline sound; source and Use precedence preserve phase.",
+  id: "dsivio-video/sound@1", summary: "Ordered presentation rules for existing Timeline sound; one placement-level 48 kHz sample origin preserves phase across Use splits, including fractional FPS. Source and Use precedence mask audibility without resetting playback.",
   types: { Style: { summary: "Shared linear gain endpoints in 0..64.", validate: validateSoundStyle }, UsePlan: { summary: "Ordered identities and indexes into typed Window/Style input lists.", validate: validateUsePlan }, Program: { summary: "Timeline with ordered resolved Use windows and shared styles.", validate: validateSoundProgram } },
   surfaces: {
     Style: { mode: "structured", doc: { summary: "Empty gain Style. Zero gain still masks earlier Uses.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Shared Style name." }, { name: "gain", required: false, accepts: "number 0..64", default: "1", summary: "Gain at window start." }, { name: "end-gain", required: false, accepts: "number 0..64", default: "gain", summary: "Gain at window end." }], outputs: [{ name: "", type: trackTypes.soundStyle, summary: "Shared Style." }] }, elaborate: decodeSoundStyle },

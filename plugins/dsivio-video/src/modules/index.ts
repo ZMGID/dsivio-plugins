@@ -20,12 +20,24 @@ import performance from "./performance/index.ts";
 import film from "./film/index.ts";
 import visual from "./visual/index.ts";
 import render from "./render/index.ts";
+import caption from "./caption/index.ts";
+import captionFine from "./caption-fine/index.ts";
+import screenOverlay from "./screen-overlay/index.ts";
+import commentSticker from "./comment-sticker/index.ts";
+import interviewEmojiReveal from "./interview-emoji-reveal/index.ts";
+import deckTrack from "./deck-track/index.ts";
+import imageCompose from "./image-compose/index.ts";
+import imageTransform from "./image-transform/index.ts";
+import mediaTrack from "./media-track/index.ts";
+import audioTrack from "./audio-track/index.ts";
+import ranking from "./ranking/index.ts";
 import { localCapabilities as pipelineCapabilities } from "../pipeline/capabilities.ts";
 import { localCapabilities as fontCapabilities } from "../fonts/capabilities.ts";
 import { localCapabilities as renderCapabilities } from "../render/capabilities.ts";
+import { rasterCapability } from "../raster/capabilities.ts";
 
-export const modules: readonly ModuleDef[] = [text, recipe, media, gen, script, program, time, pipeline, align, space, fonts, typo, sound, performance, visual, film, render];
-export const capabilities: readonly CapabilityDef[] = [...gatewayCapabilities, ...pipelineCapabilities, ...fontCapabilities, ...renderCapabilities];
+export const modules: readonly ModuleDef[] = [text, recipe, media, gen, script, program, time, pipeline, align, space, fonts, typo, sound, performance, visual, film, render, caption, captionFine, screenOverlay, commentSticker, interviewEmojiReveal, deckTrack, imageCompose, imageTransform, mediaTrack, audioTrack, ranking];
+export const capabilities: readonly CapabilityDef[] = [...gatewayCapabilities, ...pipelineCapabilities, ...fontCapabilities, ...renderCapabilities, rasterCapability];
 
 export function findModule(id: string): ModuleDef | undefined {
   return modules.find((module) => module.id === id);

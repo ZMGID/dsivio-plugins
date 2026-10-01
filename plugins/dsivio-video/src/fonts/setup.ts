@@ -17,8 +17,10 @@ function unpack(bytes: Buffer): Map<string,Buffer> {
  return files;
 }
 export async function setupFonts(): Promise<{directory:string;families:string[];faces:number}> {
- const staging=await mkdtemp(join(dirname(fontDirectory),"fonts-setup-"));
+ let staging:string|undefined;
  try {
+  await mkdir(dirname(fontDirectory),{recursive:true});
+  staging=await mkdtemp(join(dirname(fontDirectory),"fonts-setup-"));
   const faces:CatalogFace[]=[];
   for(const [family,entry] of Object.entries(families)) {
    const packageName=entry.package; const version=FONT_PACKAGE_PINS[packageName];
@@ -52,7 +54,7 @@ export async function setupFonts(): Promise<{directory:string;families:string[];
   await rename(join(staging,"catalog.json"),join(fontDirectory,"catalog.json"));
   return {directory:fontDirectory,families:Object.keys(families),faces:faces.length};
  } catch(cause) { if(cause instanceof DvError) throw cause; throw new DvError("FONT_SETUP_FAILED","Unable to prepare pinned fonts",{cause}); }
- finally { await rm(staging,{recursive:true,force:true}); }
+ finally { if(staging)await rm(staging,{recursive:true,force:true}); }
 }
 export async function readFontCatalog(): Promise<FontCatalog> {
  try { const catalog=JSON.parse(await readFile(join(fontDirectory,"catalog.json"),"utf8")) as FontCatalog; if(catalog.format!==FONT_CATALOG_VERSION||JSON.stringify(catalog.pins)!==JSON.stringify(FONT_PACKAGE_PINS)||!Array.isArray(catalog.faces)) throw new DvError("FONT_NOT_PREPARED","Font catalog does not match pinned versions"); return catalog; }
