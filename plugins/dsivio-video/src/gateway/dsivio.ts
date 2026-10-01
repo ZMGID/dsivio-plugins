@@ -1,9 +1,8 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { access, mkdir, writeFile } from "node:fs/promises";
-import { constants } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { dsivioCommand } from "../tools/dsivio.ts";
 import { DvError } from "../core/errors.ts";
 import type { AsyncExecutor } from "../core/capability.ts";
 import { isPending, isResourceRef } from "../core/value.ts";
@@ -12,24 +11,6 @@ import { imageType, videoType } from "../modules/media/index.ts";
 import { object, readRequest } from "./request.ts";
 import type { MediaKind } from "./request.ts";
 
-export async function dsivioCommand(): Promise<string> {
-  if (process.env.DSIVIO_VIDEO_DSIVIO) return process.env.DSIVIO_VIDEO_DSIVIO;
-  const executable = process.platform === "win32" ? "dsivio.cmd" : "dsivio";
-  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
-    if (!directory) continue;
-    const path = join(directory, executable);
-    try { await access(path, process.platform === "win32" ? constants.F_OK : constants.X_OK); return path; }
-    catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || !["ENOENT", "EACCES", "ENOTDIR"].includes(String(error.code))) throw new DvError("GATEWAY_COMMAND_FAILED", `Cannot locate Dsivio: ${String(error)}`, { cause: error });
-    }
-  }
-  const path = join(homedir(), ".kivio", "bin", executable);
-  try { await access(path, process.platform === "win32" ? constants.F_OK : constants.X_OK); return path; }
-  catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") throw new DvError("GATEWAY_UNAVAILABLE", "Dsivio is unavailable; open Dsivio to install its CLI", { cause: error });
-    throw new DvError("GATEWAY_COMMAND_FAILED", `Cannot access Dsivio CLI: ${String(error)}`, { cause: error });
-  }
-}
 
 export async function runDsivio(args: string[], projectRoot: string, signal?: AbortSignal): Promise<{ code: number; stdout: string; stderr: string }> {
   if (signal?.aborted) throw new DvError("ABORTED", "Dsivio command was interrupted", { cause: signal.reason });

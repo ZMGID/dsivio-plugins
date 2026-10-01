@@ -11,6 +11,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "node --test --disable-warning=ExperimentalWarning \"src/**/*.test.ts\" \"test/**/*.test.ts\""
   },
+  "dependencies": {
+    "sharp": "^0.34.5"
+  },
   "devDependencies": {
     "@types/node": "^22.18.0",
     "typescript": "^5.9.0"

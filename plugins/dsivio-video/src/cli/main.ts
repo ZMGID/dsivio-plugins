@@ -18,6 +18,17 @@ import { cancelCommand } from "./commands/cancel.ts";
 import { runtimeCommand } from "./commands/runtime.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { workerCommand } from "./commands/worker.ts";
+import { mediaProbeCommand } from "./commands/media/probe.ts";
+import { mediaCutCommand } from "./commands/media/cut.ts";
+import { mediaFramesCommand } from "./commands/media/frames.ts";
+import { mediaTileCommand, mediaTilesCommand } from "./commands/media/tile.ts";
+import { mediaBoundariesCommand } from "./commands/media/boundaries.ts";
+import { mediaFetchCommand, mediaPrepareFetchCommand } from "./commands/media/fetch.ts";
+import { transcribeCommand } from "./commands/transcribe.ts";
+import { setupCommand } from "./commands/setup.ts";
+
+// Sampling options shared by `media frames`, `tile` and `tiles` (research 06 §2.4).
+const sampling = { at: "string", start: "string", end: "string", every: "string", around: "string", occurrence: "string", padding: "string", transcript: "string" } as const;
 
 interface Command extends CommandSpec { run: (options: CliOptions) => Promise<number> }
 const commands: Record<string, Command> = {
@@ -36,6 +47,16 @@ const commands: Record<string, Command> = {
   cancel: { usage: "cancel <id> [--reason <reason>]", min: 1, max: 1, options: { reason: "string" }, run: cancelCommand },
   runtime: { usage: "runtime up|down|status|logs [--lines <n>]", min: 1, max: 1, options: { lines: "string" }, run: runtimeCommand },
   doctor: { usage: "doctor", min: 0, max: 0, run: doctorCommand },
+  "media probe": { usage: "media probe <file>", min: 1, max: 1, run: mediaProbeCommand },
+  "media cut": { usage: "media cut <file> [--start <s> --end <s> | --keep <start:end>...] [--label-time] --to <file>", min: 1, max: 1, options: { start: "string", end: "string", keep: "multiple", "label-time": "boolean", to: "string" }, run: mediaCutCommand },
+  "media frames": { usage: "media frames <file> (--at <s,...> | --every <s> | --every-frame) [--start --end | --around <phrase> --transcript <file>] [--label-time] --to <dir>", min: 1, max: 1, options: { ...sampling, "every-frame": "boolean", "label-time": "boolean", to: "string" }, run: mediaFramesCommand },
+  "media tile": { usage: "media tile <file> [sampling] [--frames <n>] [--cell <px>] [--columns <n>] --to <image>", min: 1, max: 1, options: { ...sampling, frames: "string", cell: "string", columns: "string", to: "string" }, run: mediaTileCommand },
+  "media tiles": { usage: "media tiles <file> [sampling | --ranges <json>] [--frames <n> | --every <s> | --every-frame] [--cell <px>] [--columns <n>] [--rows <n>] --to <dir>", min: 1, max: 1, options: { ...sampling, ranges: "string", frames: "string", "every-frame": "boolean", cell: "string", columns: "string", rows: "string", to: "string" }, run: mediaTilesCommand },
+  "media boundaries": { usage: "media boundaries <file> [--rate <samples/s>] [--threshold <0..1>]", min: 1, max: 1, options: { rate: "string", threshold: "string" }, run: mediaBoundariesCommand },
+  "media fetch": { usage: "media fetch <http(s)-url> --to <video>", min: 1, max: 1, options: { to: "string" }, run: mediaFetchCommand },
+  "media prepare-fetch": { usage: "media prepare-fetch", min: 0, max: 0, run: mediaPrepareFetchCommand },
+  transcribe: { usage: "transcribe <audio|video> --language <code> --to <transcript.json>", min: 1, max: 1, options: { language: "string", to: "string" }, run: transcribeCommand },
+  setup: { usage: "setup asr|status [--model <name>]", min: 1, max: 1, options: { model: "string" }, run: setupCommand },
   _worker: { usage: "_worker --workspace <project>", min: 0, max: 0, run: workerCommand },
 };
 const commonHelp = "Common options: --json --verbose --color auto|always|never --no-color --debug --workspace <path> --asset-root <path> (repeatable) --limit <n> (default 20) --help";
@@ -43,7 +64,8 @@ export async function main(argv: string[]): Promise<number> {
   let help = "Help: dsivio-video --help";
   let options: CliOptions | undefined;
   try {
-    const name = argv[0] === "--version" ? "version" : argv[0];
+    const name = argv[0] === "--version" ? "version" : argv[0] === "media" && argv[1] && !argv[1].startsWith("-") ? `media ${argv[1]}` : argv[0];
+    const rest = name?.startsWith("media ") ? argv.slice(2) : argv.slice(1);
     if (!name || name === "--help" || name === "help") {
       const args = name === "help" && argv[1] && commands[argv[1]] ? [argv[1], "--help", ...argv.slice(2)] : null;
       if (args) return await main(args);
@@ -54,7 +76,7 @@ export async function main(argv: string[]): Promise<number> {
     const command = Object.hasOwn(commands, name) ? commands[name] : undefined;
     if (!command) throw new DvError("CLI_USAGE", `Unknown command ${name}.`);
     help = `Help: dsivio-video ${name} --help`;
-    options = parseOptions(argv.slice(1), command);
+    options = parseOptions(rest, command);
     if (options.values.help) {
       result(options, { schema: "dsivio-video.help/1", command: name, usage: `dsivio-video ${command.usage}`, commonOptions: commonHelp }, [`Usage: dsivio-video ${command.usage}`, commonHelp]);
       return 0;

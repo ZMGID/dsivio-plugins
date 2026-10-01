@@ -1,12 +1,15 @@
 import { mkdir, open, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { dsivioCommand, runDsivio } from "../../gateway/dsivio.ts";
+import { runDsivio } from "../../gateway/dsivio.ts";
+import { dsivioCommand } from "../../tools/dsivio.ts";
+import { locateTool, toolNames, toolVersion } from "../../tools/index.ts";
+import { DvError } from "../../core/errors.ts";
 import { workerState } from "../../build/observe.ts";
 import type { CliOptions } from "../options.ts";
 import { openWorkspace } from "../project.ts";
 import { result } from "../output.ts";
-interface DiagnosticRow { name: string; status: "ok" | "warn" | "error"; message: string }
+interface DiagnosticRow { name: string; status: "ok" | "warn" | "error"; message: string; path?: string; source?: string; version?: string }
 export async function doctorCommand(options: CliOptions): Promise<number> {
   const workspace = openWorkspace(options);
   const rows: DiagnosticRow[] = [];
@@ -20,6 +23,18 @@ export async function doctorCommand(options: CliOptions): Promise<number> {
     await unlink(probe);
     rows.push({ name: "state", status: "ok", message: `${workspace.stateDir} is writable` });
   } catch (error) { rows.push({ name: "state", status: "error", message: `State directory is not writable: ${String(error)}` }); }
+  for (const name of toolNames) {
+    try {
+      const tool = await locateTool(name, { projectRoot: workspace.root });
+      const version = await toolVersion(name, { projectRoot: workspace.root });
+      rows.push({ name, status: "ok", message: `${version}; ${tool.path} (source: ${tool.source})`, path: tool.path, source: tool.source, version });
+    } catch (error) {
+      if (!(error instanceof DvError)) throw error;
+      // ffmpeg/ffprobe are needed by every media step; the downloader and Python only by fetch and local ASR.
+      const required = name === "ffmpeg" || name === "ffprobe";
+      rows.push({ name, status: required ? "error" : "warn", message: `${error.message}${error.hint ? `; ${error.hint}` : ""}` });
+    }
+  }
   const modelCounts: Record<string, number> = {};
   try {
     const command = await dsivioCommand();
