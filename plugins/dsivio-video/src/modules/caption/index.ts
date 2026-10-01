@@ -7,8 +7,10 @@ import { captionTypes } from "../../components/caption/types.ts";
 import { decodeHidden } from "../../components/caption/author.ts";
 import { projectCaptionContent, resolveCaptionUses } from "../../components/caption/program.ts";
 import { validateCaptionStyle, validateCaptionContent, validateCaptionUsePlan, validateCaptionUses } from "../../components/caption/validate.ts";
+import { captionStudio } from "./studio.ts";
 const caption: ModuleDef = {
  id: "dsivio-video/caption@1", summary: "Author-owned caption display identity projected onto measured Timeline word clocks; shared Hidden and ordered role-aware Uses.",
+ studio: [captionStudio],
  types: { Style: { summary: "Shared hidden or fine caption presentation intent", validate: validateCaptionStyle }, Content: { summary: "Complete authored Cues with measured display-unit clocks", validate: validateCaptionContent }, UsePlan: { summary: "Ordered typed-list Use indexes", validate: validateCaptionUsePlan }, Uses: { summary: "Ordered style selection rules, without re-cutting Cues", validate: validateCaptionUses } },
  surfaces: { Hidden: { mode: "structured", doc: { summary: "No caption presentation, participating in ordinary last-Use precedence.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Style identity" }], outputs: [{ name: "", type: captionTypes.style, summary: "Shared Hidden Style" }] }, elaborate: decodeHidden } },
  producers: {

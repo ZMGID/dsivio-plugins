@@ -23,9 +23,11 @@ Timeline、基础轨道、Film、渲染与所有已实现组件均有核对当�
 
 ## 按当前需要准备环境
 
-先确定项目边界，再执行 `dsivio-video doctor`，必要时查看 `paths` 和 `setup status`。只准备本次缺少的 ASR、browser 或 fonts；安装、准备资源与运行服务是不同状态。
+先确定项目边界与实际 CLI 入口。Dsivio Video 专属项目先读取 `.dsivio-video-plugin/active.json`；未激活先执行市场 `dsivio-video-setup`，使用公开 `dsivio tools --json` 定位 bundled Node/npm，不猜全局命令已安装。以 active 中 Node + release 的 `bin/dsivio-video.mjs` 执行下文命令；源码开发或外部 CLI 使用自己明确安装的 Node + bin。
 
-Claude Code / Codex 中使用同一套作者文件与 CLI。当前付费生成仍走 Dsivio，不因 Agent 在独立环境中运行就获得直连模型后端。插件没有登录、密钥配置或另一个付费中心。
+再执行 `doctor`，必要时查看 `paths` 和 `setup status`。只准备本次缺少的 browser、fonts 或 raster；安装、资源准备与运行服务是不同状态。Dsivio 模式本地 ASR 由 App 管理；独立模式使用插件监督的 nonce/owned-child 服务，不启动可被其他进程收养的 detached 服务。
+
+Claude Code / Codex 使用同一套作者文件与 CLI。默认 gateway=dsivio，宿主持有凭证与媒体任务；只有用户明确选择 gateway=standalone 才使用用户自己的环境变量或私有配置。后端在 plan 固定，App 不可用时不能暗中直连；实现了适配器不等于账户已开通产品或真实付费产物已验收。
 
 ## 端到端工作门禁
 
@@ -49,7 +51,7 @@ Claude Code / Codex 中使用同一套作者文件与 CLI。当前付费生成�
 
 - **花钱先获许可。** 记录具体付费工作、执行账号与预算范围。登录、额度和模型可用不代表消费授权；超出许可就重新决策。早期转写若走付费服务也受同一规则约束。价格目录不完整时，不编造精确报价。
 - **不确定绝不重提。** Dsivio 退出码 5 表示结果不确定；先查原任务、回执与 Build，禁止用新 Build 绕过。退出码 6 表示主程序未运行；打开 Dsivio 后继续观察原工作。124 或跟随超时同样先查原任务。
-- **观察不等于执行。** 关闭跟随窗口、超时或 Agent 会话结束不等于取消；用 `status` 查事实。`cancel` 只停止插件后续工作，不保证远端付费任务已取消。
+- **观察不等于执行。** 关闭跟随窗口、超时或 Agent 会话结束不等于取消；用 `status` 查事实。`cancel` 的 confirmed/requested/unsupported/too-late 与 local/remote 范围须按实际返回解释；不能把 HTTP abort 当远端已取消或已退款。
 - **完成意味着看过。** 生成成功与导出成功不代表影片合格。检查实际交付文件；记录看过/听过的范围和问题。服务缺失造成缺口就如实说明，不能把局部样品叫成片。
 - **文件就是记忆。** 恢复时先读 Brief/Treatment/Analysis/Progress，再读作者文件、Run、Results 和实际状态。Progress 保存当前问题，不无限追加日志；Candidate 才是可执行复用。
 - **保护项目边界。** 工具安装目录不是作品目录；不修改无关资产、Run 或源码。路径按声明文件解析，不按自己的 shell 位置猜。

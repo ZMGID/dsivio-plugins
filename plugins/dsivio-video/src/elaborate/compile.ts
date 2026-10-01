@@ -12,6 +12,8 @@ import { parseDvs } from "../markup/dvs.ts";
 import type { ImportDecl } from "../markup/ast.ts";
 import type { Workspace } from "../source/workspace.ts";
 import * as builtins from "../modules/index.ts";
+import type { AuthoringIndex } from "../core/authoring.ts";
+import { SourceIndexBuilder } from "./source-index.ts";
 
 export interface AuthorRegistry {
   findModule(id: string): ModuleDef | undefined;
@@ -19,14 +21,33 @@ export interface AuthorRegistry {
   findFrontend(using: string): FrontendDef | undefined;
 }
 
+export interface CompileAuthorOptions { overlay?: ReadonlyMap<string, string> }
 export function compileAuthor(entry: string, workspace: Workspace, registry: AuthorRegistry = builtins): AuthorGraph {
+  return compileAuthorDetailed(entry, workspace, registry).graph;
+}
+export function compileAuthorDetailed(entry: string, workspace: Workspace, registry: AuthorRegistry = builtins, options: CompileAuthorOptions = {}): { graph: AuthorGraph; authoring: AuthoringIndex } {
   const source = workspace.resolveSource(resolve(entry), `./${basename(entry)}`);
   const graph: AuthorGraph = { source, sources: [], records: new Map(), operations: new Map(), outputs: new Map(), publicRecords: new Map(), assets: new Map(), modules: [] };
+  const authoring = new SourceIndexBuilder(workspace.root);
+  const overlay = new Map<string, string>();
+  for (const [file, text] of options.overlay ?? []) {
+    const canonical = workspace.resolveSource(resolve(file), `./${basename(file)}`);
+    if (overlay.has(canonical) && overlay.get(canonical) !== text) throw new DvError("AUTHORING_OVERLAY_CONFLICT", "Two overlay paths address the same source with different content.");
+    overlay.set(canonical, text);
+  }
   const cache = new Map<string, Map<string, Binding>>();
   const active = new Set<string>();
   const usedModules = new Set<string>();
   const assetsByPath = new Map<string, { ref: ResourceRef; binding: Binding }>();
   const fail = (code: string, message: string, span: SourceSpan): never => { throw new DvError(code, message, { span }); };
+  const bindAuthor = (binding: Binding, span: SourceSpan): void => {
+    const owner = authoring.owner(span);
+    const surface = owner && registry.findModule(owner.moduleId)?.surfaces[owner.surface.slice(owner.surface.lastIndexOf(":") + 1)];
+    const outputs = surface?.doc.outputs.filter(output => output.type === binding.type) ?? [];
+    const port = binding.kind === "output" ? binding.port : "";
+    const output = outputs.find(output => output.name === port)?.name ?? (outputs.length === 1 ? outputs[0]!.name : undefined);
+    authoring.bind(binding, span, "output", output);
+  };
   // Public domain identities are unique across the whole closure; each source is compiled once, so a repeat claim is a real duplicate.
   const identities = new Map<string, SourceSpan>();
   const validate = (value: Value, span: SourceSpan): void => {
@@ -57,8 +78,9 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
     if (cached) return cached;
     active.add(file);
     graph.sources.push(file);
-    const text = workspace.readText(file);
+    const text = overlay.get(file) ?? workspace.readText(file);
     const header = readHeader(file, text);
+    authoring.addUnit(file, text, header.using === "dsivio-video/markup@1" ? "dvml" : "dvs");
     const unit = createHash("sha256").update(file).digest("hex").slice(0, 16);
     let sequence = 0;
     const local = new Map<string, Binding>();
@@ -71,6 +93,7 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
     const ctx: ElaborationContext = {
       file,
       fail,
+      authoring(registration) { authoring.register(registration); },
       identity(kind, key, span) {
         const claim = `${kind}\u0000${key}`;
         const previous = identities.get(claim);
@@ -83,6 +106,7 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
         const key = `${unit}:record:${sequence++}`;
         const binding: Binding = { kind: "record", key, type: value.type, value };
         graph.records.set(key, { key, value, span });
+        bindAuthor(binding, span);
         if (name !== null) publish(name, binding, span);
         return binding;
       },
@@ -102,12 +126,17 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
             return binding.kind === "record" ? { record: binding.key } : { operation: binding.operation, port: binding.port };
           };
           inputs[port] = Array.isArray(input) ? input.map(convert) : convert(input);
+          for (const [index, binding] of (Array.isArray(input) ? input : [input]).entries()) {
+            const owner = authoring.relations.findLast(r => r.bindingKey === binding.key);
+            authoring.inputs.push({ operation: key, port, ...(Array.isArray(input) ? { index } : {}), bindingKey: binding.key, ...(owner ? { authorKey: owner.authorKey } : {}) });
+          }
         }
         const outputs: Record<string, Binding> = {};
         for (const [port, type] of Object.entries(producer!.outputs)) {
           const hash = type.lastIndexOf("#");
           if (hash < 0 || !registry.findModule(type.slice(0, hash))?.types[type.slice(hash + 1)]) fail("UNKNOWN_TYPE", `Unknown type ${type}`, spec.span);
           outputs[port] = { kind: "output", key: `${key}.${port}`, operation: key, port, type };
+          bindAuthor(outputs[port]!, spec.span);
         }
         for (const [port, name] of Object.entries(spec.publish)) {
           if (!outputs[port]) fail("AUTHOR_PORT_BINDING_MISMATCH", `Unknown output port ${port}`, spec.span);
@@ -139,6 +168,14 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
         return surfaces.get(tag)?.mode === "raw";
       } });
       if (document.root !== "dvml") throw new DvError("MARKUP_ROOT", "Author source requires a dvml root", { span: spanAt(file, text, header.bodyStart) });
+      const surfaceModules = new Map<string, string>();
+      for (const decl of document.imports) {
+        if (!decl.from) continue;
+        const module = registry.findModule(decl.from);
+        if (!module) continue; // surfacesFor reports the original import diagnostic.
+        for (const tag of Object.keys(module.surfaces)) surfaceModules.set(decl.as ? `${decl.as}:${tag}` : tag, module.id);
+      }
+      authoring.addMarkup(document, surfaceModules);
       surfaces ??= surfacesFor(document.imports);
       for (const decl of document.imports) {
         if (!decl.source) continue;
@@ -158,7 +195,16 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
       const frontend = registry.findFrontend(header.using);
       if (!frontend) throw new DvError("UNKNOWN_FRONTEND", `Unknown frontend ${header.using}`, { span: spanAt(file, text, 0, header.bodyStart) });
       const sheet = parseDvs(file, text);
+      authoring.addSheet(sheet);
       frontend!.compile(sheet, { record: (name, value, span) => { ctx.record(name, value, span); }, fail });
+    }
+    for (const owner of authoring.elements.values()) {
+      if (owner.elementSpan.file !== file) continue;
+      for (const attr of owner.attributes) {
+        if (attr.attribute.value.kind !== "ref") continue;
+        const binding = local.get(attr.attribute.value.name) ?? imported.get(attr.attribute.value.name);
+        if (binding) authoring.references.push({ authorKey: owner.authorKey, attribute: attr.name, bindingKey: binding.key });
+      }
     }
     const exports = new Map([...imported, ...local]);
     cache.set(file, exports);
@@ -197,5 +243,5 @@ export function compileAuthor(entry: string, workspace: Workspace, registry: Aut
   };
   for (const key of graph.operations.keys()) visit(key);
   graph.modules = [...usedModules].sort();
-  return graph;
+  return { graph, authoring: authoring.snapshot() };
 }

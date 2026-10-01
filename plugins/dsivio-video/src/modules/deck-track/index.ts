@@ -1,5 +1,5 @@
 import { DvError } from "../../core/errors.ts";
-import type { ModuleDef } from "../../core/module.ts";
+import type { ModuleDef, ElaborationContext } from "../../core/module.ts";
 import type { Json, ResourceRef, Value } from "../../core/value.ts";
 import type { FontStack } from "../../fonts/types.ts";
 import { fontTypes } from "../../fonts/types.ts";
@@ -10,18 +10,49 @@ import { timelineTypes } from "../../timeline/types.ts";
 import type { Surface } from "../../render/ir.ts";
 import { renderTypes } from "../../render/ir.ts";
 import { deckTypes } from "../../components/deck-track/types.ts";
-import type { DeckLabel } from "../../components/deck-track/types.ts";
+import type { DeckLabel, DeckPlan } from "../../components/deck-track/types.ts";
 import type { MediaSource } from "../../components/media-track/types.ts";
 import { validateSource } from "../../components/media-track/source.ts";
-import { decodeDeck, decodeLabel, INSTANT_ATTRIBUTES } from "../../components/deck-track/author.ts";
+import { decodeDeck as elaborateDeck, decodeLabel as elaborateLabel, INSTANT_ATTRIBUTES } from "../../components/deck-track/author.ts";
 import { assembleDeck } from "../../components/deck-track/program.ts";
 import { lowerDeck } from "../../components/deck-track/lower.ts";
 import { validateDeckLabel, validateDeckPlan, validateDeckProgram, validateDeckSource } from "../../components/deck-track/validate.ts";
 import { typographyStyle } from "../../components/typo/author.ts";
 import { RECIPE, validateRecipe } from "../recipe/index.ts";
+import { deckLabelStudio, deckTrackStudio } from "./studio.ts";
+import type { ElementNode, RawElement } from "../../markup/ast.ts";
+function decodeDeck(node: ElementNode | RawElement, ctx: ElaborationContext): void {
+  elaborateDeck(node, { ...ctx, operation(spec) {
+    const outputs = ctx.operation(spec), plan = spec.inputs.plan;
+    if (outputs.program && plan && !Array.isArray(plan) && plan.kind === "record" && node.kind === "element") {
+      const cards = (plan.value.data as unknown as DeckPlan).cards;
+      const children = node.children.filter(child => child.kind === "element");
+      const sources = spec.inputs.sources, instants = spec.inputs.instants;
+      const operation = outputs.program.kind === "output" ? outputs.program.operation : outputs.program.key;
+      for (const [index, card] of cards.entries()) {
+        const child = children[index]; if (!child || child.kind !== "element") continue;
+        const source = Array.isArray(sources) ? sources[index] : undefined;
+        const instant = Array.isArray(instants) ? instants[index] : undefined;
+        if (source) ctx.authoring({ binding: source, element: child, role: "output", identity: card.cardKey, consumer: { operation, port: "sources", index } });
+        if (instant) ctx.authoring({ binding: instant, element: child, role: "instant", identity: card.cardKey, consumer: { operation, port: "instants", index } });
+      }
+    }
+    return outputs;
+  } });
+}
+function decodeLabel(node: ElementNode | RawElement, ctx: ElaborationContext): void {
+  elaborateLabel(node, { ...ctx, operation(spec) {
+    const outputs = ctx.operation(spec), key = spec.inputs.key;
+    if (outputs.label && key && !Array.isArray(key) && key.kind === "record" && typeof key.value.data === "string") {
+      ctx.authoring({ binding: outputs.label, element: node, role: "parameter", identity: key.value.data });
+    }
+    return outputs;
+  } });
+}
 
 const deck: ModuleDef = {
   id: "dsivio-video/deck-track@1", summary: "DepthStack card decks with deterministic reflow and source-clock-preserving playback.",
+  studio: [deckTrackStudio, deckLabelStudio],
   types: {
     Label: { summary: "Exact-font text placed on and moving with a card.", validate: validateDeckLabel },
     Source: { summary: "Explicit image extent, normalized picture or compositable surface.", validate: validateDeckSource },

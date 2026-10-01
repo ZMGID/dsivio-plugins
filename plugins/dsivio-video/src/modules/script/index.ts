@@ -3,9 +3,11 @@ import { parseScript } from "../../timeline/script.ts";
 import { timelineTypes } from "../../timeline/types.ts";
 import { validateNarrative, validateSegmentRef, validateSelectionRef, validateMomentRef, validateCaptionDocument } from "../../timeline/validate.ts";
 import { TEXT } from "../text/index.ts";
+import { scriptStudio } from "./studio.ts";
 
 const scriptModule: ModuleDef = {
   id: "dsivio-video/script@1", summary: "Raw author narrative, pronunciation, captions and semantic references.",
+  studio: [scriptStudio],
   types: {
     Narrative: { summary: "Untimed author truth with distinct token, segment and story anchors.", validate: validateNarrative },
     SegmentRef: { summary: "Complete named segment excerpt.", validate: validateSegmentRef },
@@ -23,7 +25,8 @@ const scriptModule: ModuleDef = {
       const id = element.attributes[0]!.value.text.trim();
       ctx.identity("narrative", id, element.span);
       const result = parseScript(element.body, id, ctx.file, element.bodyStart, element.bodySpan);
-      ctx.record(id, { type: timelineTypes.narrative, data: result.narrative }, element.span);
+      const narrative = ctx.record(id, { type: timelineTypes.narrative, data: result.narrative }, element.span);
+      ctx.authoring({ binding: narrative, element, role: "script", identity: result.narrative.storyKey });
       ctx.record(`${id}.caption`, { type: timelineTypes.caption, data: result.narrative.captions }, element.span);
       for (const view of ["speech", "dialogue"] as const) ctx.record(`${id}.${view}`, { type: TEXT, data: result[view] }, element.span);
       for (const [name, segment] of Object.entries(result.segments)) {

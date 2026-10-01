@@ -13,6 +13,7 @@ import { lowerOverlay } from "../../components/screen-overlay/lower.ts";
 import { overlayTypes } from "../../components/screen-overlay/types.ts";
 import { OVERLAY_FIELDS, OVERLAY_KINDS, validateOverlayPlan, validateOverlayProgram } from "../../components/screen-overlay/validate.ts";
 import { WINDOW_ATTRIBUTES } from "../time/index.ts";
+import { overlayStudio } from "./studio.ts";
 
 function input(inputs: ProducerInputs, name: string): Json {
   const value = inputs[name];
@@ -30,7 +31,36 @@ const surfaces: Record<string, SurfaceDef> = {
       ],
       children: OVERLAY_KINDS.map(tag => ({ tag, repeat: true, summary: `${tag} overlay with explicit parameters and window.` })),
       outputs: [ { name: "program", type: overlayTypes.program, summary: "Inspectable overlay plan." }, { name: "track", type: renderTypes.visual, summary: "Terminal full-canvas visual track." } ],
-    }, elaborate: decodeOverlayTrack,
+    },
+    elaborate(node, ctx) {
+      const effectSources = new Map<string, { element: typeof node; identity: string }>();
+      decodeOverlayTrack(node, {
+        ...ctx,
+        operation(spec) {
+          const outputs = ctx.operation(spec);
+          const element = node.kind === "element" ? node.children.find(child => child.kind === "element" && child.span.start === spec.span.start && child.span.end === spec.span.end) : undefined;
+          if (element?.kind === "element" && outputs.window) {
+            ctx.authoring({ binding: outputs.window, element, role: "window", identity: spec.label });
+            effectSources.set(outputs.window.key, { element, identity: spec.label });
+          }
+          if (spec.producer === "dsivio-video/screen-overlay@1#program") {
+            const key = spec.inputs.key;
+            if (key && !Array.isArray(key) && key.kind === "record" && typeof key.value.data === "string") ctx.authoring({ binding: outputs.program!, element: node, role: "output", identity: key.value.data });
+            const plan = spec.inputs.plan;
+            if (plan && !Array.isArray(plan) && node.kind === "element") {
+              const windows = spec.inputs.windows;
+              if (Array.isArray(windows)) windows.forEach((binding, index) => {
+                const source = effectSources.get(binding.key);
+                if (!source) throw new DvError("STUDIO_PROVENANCE", "Overlay effect window has no author declaration.");
+                ctx.authoring({ binding, element: source.element, role: "window", identity: source.identity, consumer: { operation: outputs.program!.kind === "output" ? outputs.program!.operation : outputs.program!.key, port: "windows", index } });
+                ctx.authoring({ binding: plan, element: source.element, role: "plan", identity: source.identity });
+              });
+            }
+          }
+          return outputs;
+        },
+      });
+    },
   },
 };
 for (const kind of OVERLAY_KINDS) surfaces[kind] = {
@@ -50,7 +80,7 @@ const overlay: ModuleDef = {
   types: {
     AuthorPlan: { summary: "Ordered typed effect parameters and projected window indexes.", validate: validateOverlayPlan },
     Program: { summary: "Resolved canvas, timeline and independent effect lifetimes.", validate: validateOverlayProgram },
-  }, surfaces,
+  }, surfaces, studio: [overlayStudio],
   producers: {
     program: {
       inputs: { key: { type: timelineTypes.consumerKey }, canvas: { type: spaceTypes.canvas }, timeline: { type: timelineTypes.timeline }, plan: { type: overlayTypes.plan }, windows: { type: timelineTypes.window, list: true } },

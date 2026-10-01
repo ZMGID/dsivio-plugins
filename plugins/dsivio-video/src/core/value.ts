@@ -65,14 +65,18 @@ export function resourcesIn(data: Json): { path: (string | number)[]; ref: Resou
 /** Deterministic JSON: sorted object keys, -0 written as 0. Throws on values JSON cannot carry. */
 export function canonicalJson(data: Json): string {
   const encode = (node: Json): string => {
-    if (node === null || typeof node === "boolean" || typeof node === "string") return JSON.stringify(node);
+    if (node === null || typeof node === "boolean") return JSON.stringify(node);
+    if (typeof node === "string") {
+      if (!node.isWellFormed()) throw new TypeError("Lone Unicode surrogate is not valid JCS JSON");
+      return JSON.stringify(node);
+    }
     if (typeof node === "number") {
       if (!Number.isFinite(node)) throw new TypeError(`non-finite number in value: ${node}`);
       return JSON.stringify(Object.is(node, -0) ? 0 : node);
     }
     if (Array.isArray(node)) return `[${node.map(encode).join(",")}]`;
     const keys = Object.keys(node).sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${encode(node[key]!)}`).join(",")}}`;
+    return `{${keys.map((key) => `${encode(key)}:${encode(node[key]!)}`).join(",")}}`;
   };
   return encode(data);
 }

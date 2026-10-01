@@ -23,11 +23,11 @@
 | media tile：同共享 sampling；--frames/--cell/--columns/--to | src/cli/main.ts:56 | 两个例子实际执行并查看 JPEG |
 | media tiles：共享 sampling；--ranges/--frames/--every-frame/--cell/--columns/--rows/--to | src/cli/main.ts:57 | 已实现 |
 | media boundaries --rate/--threshold；fetch --to；prepare-fetch | src/cli/main.ts:58–60 | 候选切点；下载与检查 |
-| transcribe --language/--to | src/cli/main.ts:61 | 已实现，本轮没有使用 ASR |
+| transcribe --language/--model/--to | src/cli/main.ts；src/cli/commands/transcribe.ts；src/asr/backend.ts | 同一后端入口；真实 en/zh 本地识别已运行，云端付费证据仍缺配置 |
 | setup asr/browser/fonts/raster/status；--model、--kind render/capture/all | src/cli/main.ts:62；src/cli/commands/setup.ts | 已实现；本轮查询 status，例子复用已准备资源 |
 | snapshot HTML/URL 或 --studio；--at-frame、--start-frame、--end-frame-exclusive、--step-frames、--grid、--cell、--to | src/cli/main.ts:63；src/cli/commands/snapshot.ts | 已实现；不是 Studio 服务存在证据 |
 | --json、--verbose、--workspace、--asset-root、--help | src/cli/main.ts:69；src/cli/options.ts | workspace/json 在全部新例子实际使用 |
-| dsivio media models/status；DSIVIO_VIDEO_DSIVIO；宿主 5/6/124 | src/gateway/index.ts；src/gateway/dsivio.ts；src/tools/dsivio.ts | 当前网关，5/124 先查原任务；6 恢复主程序 |
+| dsivio media image/video/speech/transcribe/asr/cancel/models/status；宿主 5/6/7/124 | src/gateway/dsivio.ts；src/asr/backend.ts；宿主 media_generation/cli.rs | 5/124 查原任务，6 不在执行中换后端，7 是已取消；不是所有供应商实测证明 |
 | dsivio tools --json | src/tools/index.ts | 宿主本地工具定位，未安装新工具 |
 
 ## 已有作者语言与生成属性
@@ -46,12 +46,13 @@
 | text-template block；kind/order/slot/label；fixed/axis/variant/slot | src/modules/text/template.ts:77–104 |
 | 模板 label 换行与 paragraph 分隔 | src/modules/text/render.ts:105–122 |
 | media:Image/Video/Audio 的 id/src；裸 id 资源 | src/modules/media/index.ts:23–56 |
-| gen:Image/Video 的 id/model/prompt | src/modules/gen/index.ts:51–55,67–72 |
-| gen:Image 的 ratio/size/quality/count | src/modules/gen/index.ts:45,55,74–84 |
-| gen:Video 的 duration/resolution/ratio/audio/first-frame/last-frame | src/modules/gen/index.ts:45,55–56,74–90 |
-| gen:Reference 的 image/video/audio；每个恰一引用 | src/modules/gen/index.ts:58–60,97–102 |
-| gen:Option 的 name/value/type，string/number/boolean/json | src/modules/gen/index.ts:103–120；src/gateway/validate.ts:7（当前拒绝） |
-| .image/.video 只发布首个媒体 | src/modules/gen/index.ts:49,62,125；src/gateway/dsivio.ts:97–100 |
+| gen:Image/Video 的 id/model/prompt | src/modules/gen/index.ts；vocabulary SurfaceDoc |
+| gen:Image 的 ratio/size/quality/count | src/modules/gen/index.ts；src/gateway/description.ts |
+| gen:Video 的 duration/resolution/ratio/audio/first-frame/last-frame | src/modules/gen/index.ts；后端实际 description（auto 仅声明时可用） |
+| gen:Reference 的 image/video/audio；每个恰一引用 | src/modules/gen/index.ts |
+| gen:Option 的 name/value/type，string/number/boolean/json | src/modules/gen/index.ts；src/gateway/description.ts/validate.ts；Image/Video/Speech 同一有限规则校验 |
+| .image/.video/.audio 只发布首个媒体，任务保存全部 outputs | src/modules/gen/index.ts；src/gateway/dsivio.ts/standalone.ts |
+| gen:Speech 的 text/mode/voice/voice-ref/consent-attestation/instruction/output-format | src/modules/gen/index.ts；真实同意文件为资源依赖，TTS 文案不是词时间证据 |
 | dvrun 的 version；author.source；target.output | src/run/parse.ts:37–57 |
 | file 的 id/type/from/media-type；value 的 id/type/from | src/run/parse.ts:40,64–75 |
 | value JSON 的 type/data | src/plan/plan.ts:98–107 |
@@ -59,22 +60,20 @@
 
 ## 实时模型目录字段（不是 gen 属性）
 
-| 提到的字段 | 定义 file:line |
+| 提到的字段/行为 | 权威定义 |
 |---|---|
-| id/kind/known；启用检查 | src/gateway/index.ts:25–35 |
-| modes | src/gateway/validate.ts:17–20 |
-| durations/resolutions/ratios/sizes/qualities；customPixelSize | src/gateway/validate.ts:23–28 |
-| audioToggle；firstFrame/lastFrame/lastFrameNeedsFirst | src/gateway/validate.ts:30–33 |
-| maxReferenceImages/maxReferenceVideos/maxReferenceAudios | src/gateway/validate.ts:34–37 |
-| referenceAudioNeedsVisual；framesExcludeReferences；localReferenceMedia | src/gateway/validate.ts:38–40 |
-| maxPromptLength | src/gateway/validate.ts:41–47 |
-| maxCount；defaults | src/gateway/validate.ts:49–57 |
-| backend、cost、price=unknown、request/summary | src/gateway/index.ts:37–41 |
-| gateway=auto/dsivio；config.json | src/gateway/index.ts:17–24 |
-| task/receipt/summary | src/build/store.ts:21–33；src/cli/commands/inspect.ts:17–19 |
-| DSIVIO_VIDEO_DSIVIO；Dsivio 命令定位 | src/tools/dsivio.ts:8–24 |
-| DSIVIO_VIDEO_FFMPEG/FFPROBE/YT_DLP/PYTHON；工具来源顺序 | src/tools/index.ts:10–13,75–102 |
-| .dsivio-video/ 项目根与 store/runtime/results 配置布局 | docs/design/phase1.md:44–47,69–79 |
+| ModelEntry id/kind/known/description；启用与连接检查 | src/gateway/index.ts；src/gateway/backend.ts；src/gateway/standalone-config.ts |
+| arguments 的 string/boolean/integer/number/mediaList、默认与存在性 | src/gateway/description.ts；后端真实 route description |
+| constraints 的条件/数量/组合/允许域；Pending 物化后媒体检查 | src/gateway/description.ts；src/gateway/validate.ts |
+| products/lifecycle/factsComplete/unknownFacts/billingInfo | src/gateway/description.ts；src/gateway/providers/description.ts；宿主 model_parameters.rs |
+| factsRevision：JCS/RFC8785 SHA256，不匹配要求 replan | src/gateway/description.ts；src/gateway/validate.ts |
+| backend 与 capabilitySnapshot/requestHash；价格未知不是0 | src/gateway/request.ts；src/plan/preview.ts；src/build/worker.ts |
+| gateway=auto/dsivio/standalone；不可达限定的计划前选择 | src/gateway/backend.ts；src/asr/backend.ts |
+| task/receipt/summary；不确定提交不重交 | src/build/store.ts；src/gateway/dsivio.ts；src/gateway/standalone-ledger.ts |
+| DSIVIO_VIDEO_DSIVIO；Dsivio 命令定位 | src/tools/dsivio.ts |
+| DSIVIO_VIDEO_FFMPEG/FFPROBE/YT_DLP/PYTHON；工具来源顺序与最小子进程环境 | src/tools/index.ts |
+| .dsivio-video/ 项目根与 store/runtime/results 布局 | docs/design/phase1.md；skills/dsivio-video/references/environment/project-runtime.md |
+| 本地转写 nonce/owned child、标准样本与离线证据 | src/asr/client.ts/service.ts/install.ts；services/asr/server.py |
 
 ## 已核对的生产接口（全部模块名以 dsivio-video/ 开头、@1 结尾）
 

@@ -15,7 +15,7 @@ import type { Value } from "../../core/value.ts";
 import { parseMarkup } from "../../markup/parse.ts";
 import { parseScript } from "../../timeline/script.ts";
 import { assembleTimeline, parseClock } from "../../timeline/timeline.ts";
-import { projectInstant } from "../../timeline/temporal.ts";
+import { projectInstant, projectWindow } from "../../timeline/temporal.ts";
 import { timelineTypes } from "../../timeline/types.ts";
 import type { SemanticTake } from "../../timeline/types.ts";
 import text from "../text/index.ts";
@@ -96,6 +96,7 @@ test("shared instant decoding restricts origins and projects absolute, semantic 
     record() { throw new DvError("TEST_CONTEXT", "Decoder must not publish"); },
     operation() { throw new DvError("TEST_CONTEXT", "Decoder must not execute"); },
     asset() { throw new DvError("TEST_CONTEXT", "Decoder must not access media"); },
+    authoring() { throw new DvError("TEST_CONTEXT", "Decoder must not register authoring units"); },
     fail(code, message, span) { throw new DvError(code, message, { span }); },
   };
   const element = (attrs: string) => parseMarkup(ctx.file, `<?dvml using="dsivio-video/markup@1"?><dvml><import as="time" from="dsivio-video/time@1"/><time:Instant ${attrs}/></dvml>`, { isRaw: () => false }).body[0]!;
@@ -117,4 +118,36 @@ test("shared instant decoding restricts origins and projects absolute, semantic 
   assert.throws(() => decode('at="1f" moment={cue}'), { code: "TIME_BINDING" });
   assert.throws(() => decode('instant="program.end+1f-2f"'), { code: "TYPE_INVALID" });
   assert.deepEqual(decodeWindowAttributes(element(''), ctx), { kind: "during", source: "program" });
+  const windowExpression = (attrs: string) => {
+    const expression = decodeWindowAttributes(element(attrs), ctx);
+    assert.ok(!("type" in expression));
+    time.types.WindowExpression!.validate(expression);
+    return expression;
+  };
+  const offset = windowExpression('at="moment.cue+5f" moment={cue} for="10f"');
+  assert.ok(offset.kind === "at");
+  assert.deepEqual(offset.source, narrative.moments[0]);
+  assert.equal(offset.expression, "moment.cue+5f");
+  const offsetWindow = projectWindow(timeline, offset, "offset-window");
+  assert.deepEqual(offsetWindow.frames, { start: 16, end: 26 });
+  assert.equal(offsetWindow.leading.expression, "moment.cue+5f");
+  assert.equal(offsetWindow.leading.editAuthority, "local-offset");
+  assert.equal(offsetWindow.trailing.editAuthority, "duration");
+  assert.deepEqual(projectWindow(timeline, { ...offset, expression: "moment.cue+7f" }, "edited-window").frames, { start: 18, end: 28 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('until="moment.cue+15f" moment={cue} for="10f"'), "until-offset").frames, { start: 16, end: 26 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('at="moment.cue-5f" moment={cue} for="10f"'), "negative-offset").frames, { start: 6, end: 16 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('at="selection.end+5f" selection={part} for="10f"'), "selection-offset").frames, { start: 18, end: 28 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('at="segment.end-5f" segment={segment} for="3f"'), "segment-offset").frames, { start: 29, end: 32 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('at={segment} boundary="start" for="8f"'), "segment-boundary").frames, { start: 4, end: 12 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('until={part} boundary="end" for="5f"'), "selection-boundary").frames, { start: 8, end: 13 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('at="program.start+2f" for="10f"'), "program-offset").frames, { start: 2, end: 12 });
+  assert.deepEqual(projectWindow(timeline, windowExpression('at="moment.cue+10ms" moment={cue} for="10ms"'), "fractional-offset").frames, { start: 11, end: 12 });
+  assert.deepEqual(windowExpression('at="250ms" for="1s"'), { kind: "at", source: "250ms", duration: "1s" });
+  assert.deepEqual(projectWindow(timeline, windowExpression('at={cue} for="2f"'), "original-moment").frames, { start: 11, end: 13 });
+  assert.throws(() => windowExpression('at="moment.cue+5f" for="10f"'), { code: "TYPE_INVALID" });
+  assert.throws(() => windowExpression('at="moment.cue+5f+2f" moment={cue} for="10f"'), { code: "TYPE_INVALID" });
+  assert.throws(() => windowExpression('at="moment.cue+5f" selection={part} for="10f"'), { code: "TYPE_INVALID" });
+  assert.throws(() => windowExpression('at="moment.cue+5f" moment={cue} boundary="start" for="10f"'), { code: "TIME_BINDING" });
+  assert.throws(() => projectWindow(timeline, windowExpression('at="moment.cue-12f" moment={cue} for="10f"'), "outside-offset"), { code: "TIME_OUTSIDE" });
+  assert.throws(() => time.types.WindowExpression!.validate({ kind: "at", expression: "program.start", duration: "10f" }), { code: "TYPE_INVALID" });
 });

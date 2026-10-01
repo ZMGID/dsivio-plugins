@@ -11,7 +11,7 @@ import { validateEvidence, validateSpeechAudio, validateMedia, language } from "
 import { attrs, literal, reference, empty, unsigned, input } from "../pipeline/index.ts";
 
 export const ALIGN_MODULE = "dsivio-video/align@1";
-const languageType = `${ALIGN_MODULE}#Language`;
+const languageType = `${ALIGN_MODULE}#Language`, modelType = `${ALIGN_MODULE}#Model`;
 const align: ModuleDef = {
   id: ALIGN_MODULE, summary: "Prepare acoustic evidence and match a complete authored segment to synchronized media.",
   types: {
@@ -20,6 +20,7 @@ const align: ModuleDef = {
     SemanticTake: { summary: "Complete segment/token anchor locations on unchanged media.", validate: validateSemanticTake },
     Adjustment: { summary: "Local anchor edits without media changes.", validate: validateAdjustment },
     Language: { summary: "Explicit lowercase two/three-letter alignment language.", validate: language },
+    Model: { summary: "Explicit enabled local/cloud transcribe identity.", validate(data) { if (typeof data !== "string" || !data.trim() || !data.includes("/")) throw new DvError("TYPE_INVALID", "ASR model requires provider/model identity"); } },
   },
   producers: {
     speechAudio: { inputs: { media: { type: timelineTypes.media } }, outputs: { audio: pipelineTypes.speechAudio }, run(inputs) {
@@ -28,7 +29,12 @@ const align: ModuleDef = {
       if (samples < 1n || samples > BigInt(Number.MAX_SAFE_INTEGER)) throw new DvError("SPEECH_SAMPLE_OVERFLOW", "Speech sample count exceeds the valid domain");
       return { needs: { audio: { capability: "local/speech-audio", request: { sound: media.sound as unknown as Json, totalSamples16k: Number(samples) } } } };
     } },
-    evidence: { inputs: { audio: { type: pipelineTypes.speechAudio }, language: { type: languageType } }, outputs: { evidence: pipelineTypes.evidence }, previewsPending: true, run(inputs) { return { needs: { evidence: { capability: "local/align", request: { audio: input(inputs, "audio"), language: input(inputs, "language") } } } }; } },
+    evidence: { inputs: { audio: { type: pipelineTypes.speechAudio }, language: { type: languageType }, model: { type: modelType, optional: true } }, outputs: { evidence: pipelineTypes.evidence }, previewsPending: true, run(inputs) {
+      const audio = input(inputs, "audio"), lang = input(inputs, "language");
+      const pending = audio !== null && typeof audio === "object" && "$pending" in audio;
+      if (!pending) validateSpeechAudio(audio);
+      return { needs: { evidence: { capability: "gateway/transcribe", request: { model: inputs.model === undefined ? "local/whisperx-small" : input(inputs, "model"), arguments: { audioFile: pending ? audio : audio.resource as unknown as Json, language: lang, timestamps: "word", ...(pending ? {} : { sampleFrames: audio.totalSamples }) } } } } };
+    } },
     materialize: { inputs: { narrative: { type: timelineTypes.narrative }, segment: { type: timelineTypes.segment }, media: { type: timelineTypes.media }, evidence: { type: pipelineTypes.evidence, optional: true } }, outputs: { take: timelineTypes.take }, run(inputs) {
       const narrative = input(inputs, "narrative"); const segment = input(inputs, "segment"); const media = input(inputs, "media"); const evidence = inputs.evidence === undefined ? undefined : input(inputs, "evidence");
       validateNarrative(narrative); validateSegmentRef(segment); validateMedia(media); if (evidence !== undefined) validateEvidence(evidence);
@@ -37,8 +43,8 @@ const align: ModuleDef = {
     adjust: { inputs: { take: { type: timelineTypes.take }, adjustment: { type: timelineTypes.adjustment } }, outputs: { take: timelineTypes.take }, run(inputs) { const take = input(inputs, "take"); const adjustment = input(inputs, "adjustment"); validateSemanticTake(take); validateAdjustment(adjustment); return { outputs: { take: { type: timelineTypes.take, data: adjustTake(take, adjustment) as unknown as Json } } }; } },
   },
   surfaces: {
-    SemanticTake: { mode: "structured", doc: { summary: "Match a complete Script segment to real normalized media; empty segments skip all speech IO.", attributes: ["id", "narrative", "segment", "media", "language"].map(name => ({ name, required: name !== "language", accepts: name === "narrative" ? timelineTypes.narrative : name === "segment" ? timelineTypes.segment : name === "media" ? timelineTypes.media : "text", summary: name === "language" ? "Required for spoken segments; forbidden for empty segments." : name })), outputs: [{ name: "take", type: timelineTypes.take, summary: "Semantic segment and local token frames." }] }, elaborate(node, ctx) {
-      if (node.kind !== "element") return ctx.fail("MARKUP_ELEMENT", "SemanticTake is structured", node.span); empty(node, ctx); const a = attrs(node, ["id", "narrative", "segment", "media", "language"], ctx); const id = literal(a.id, "id", node, ctx);
+    SemanticTake: { mode: "structured", doc: { summary: "Match a complete Script segment to real normalized media; empty segments skip all speech IO.", attributes: ["id", "narrative", "segment", "media", "language", "model"].map(name => ({ name, required: !["language", "model"].includes(name), accepts: name === "narrative" ? timelineTypes.narrative : name === "segment" ? timelineTypes.segment : name === "media" ? timelineTypes.media : "text", summary: name === "language" ? "Required for spoken segments; forbidden for empty segments." : name === "model" ? "Explicit transcribe model; default local/whisperx-small. A configured cloud model uploads audio and may charge." : name })), outputs: [{ name: "take", type: timelineTypes.take, summary: "Semantic segment and local token frames." }] }, elaborate(node, ctx) {
+      if (node.kind !== "element") return ctx.fail("MARKUP_ELEMENT", "SemanticTake is structured", node.span); empty(node, ctx); const a = attrs(node, ["id", "narrative", "segment", "media", "language", "model"], ctx); const id = literal(a.id, "id", node, ctx);
       const narrative = reference(a.narrative, [timelineTypes.narrative], node, ctx); const segment = reference(a.segment, [timelineTypes.segment], node, ctx); const media = reference(a.media, [timelineTypes.media], node, ctx);
       if (narrative.kind !== "record" || segment.kind !== "record") return ctx.fail("SPEECH_SEGMENT_INVALID", "Narrative and Segment must be static Script records", node.span);
       validateNarrative(narrative.value.data); validateSegmentRef(segment.value.data);
@@ -47,10 +53,10 @@ const align: ModuleDef = {
       if (!canonical || canonical.storyKey !== segmentData.storyKey || canonical.tokenBounds.start !== segmentData.tokenBounds.start || canonical.tokenBounds.end !== segmentData.tokenBounds.end || canonical.anchors.start !== segmentData.anchors.start || canonical.anchors.end !== segmentData.anchors.end) return ctx.fail("SPEECH_SEGMENT_INVALID", "Segment must be a complete Narrative segment", node.span);
       const spoken = canonical.tokenBounds.end > canonical.tokenBounds.start;
       const inputs = { narrative, segment, media };
-      if (!spoken) { if (a.language) return ctx.fail("SPEECH_LANGUAGE_INVALID", "Empty segment cannot specify language", a.language.span); ctx.operation({ producer: `${ALIGN_MODULE}#materialize`, inputs, publish: { take: `${id}.take` }, label: id, span: node.span }); return; }
+      if (!spoken) { if (a.language || a.model) return ctx.fail("SPEECH_LANGUAGE_INVALID", "Empty segment cannot specify speech language or model", (a.language ?? a.model)!.span); ctx.operation({ producer: `${ALIGN_MODULE}#materialize`, inputs, publish: { take: `${id}.take` }, label: id, span: node.span }); return; }
       const lang = literal(a.language, "language", node, ctx); language(lang);
       const audio = ctx.operation({ producer: `${ALIGN_MODULE}#speechAudio`, inputs: { media }, publish: {}, label: `${id}:speech-audio`, span: node.span });
-      const evidence = ctx.operation({ producer: `${ALIGN_MODULE}#evidence`, inputs: { audio: audio.audio!, language: ctx.record(null, { type: languageType, data: lang }, node.span) }, publish: {}, label: `${id}:align`, span: node.span });
+      const evidence = ctx.operation({ producer: `${ALIGN_MODULE}#evidence`, inputs: { audio: audio.audio!, language: ctx.record(null, { type: languageType, data: lang }, node.span), ...(a.model ? { model: ctx.record(null, { type: modelType, data: literal(a.model, "model", node, ctx) }, a.model.span) } : {}) }, publish: {}, label: `${id}:align`, span: node.span });
       ctx.operation({ producer: `${ALIGN_MODULE}#materialize`, inputs: { ...inputs, evidence: evidence.evidence! }, publish: { take: `${id}.take` }, label: id, span: node.span });
     } },
     Adjust: { mode: "structured", doc: { summary: "Edit existing local anchors without changing media or rerunning recognition.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Output prefix." }, { name: "source", required: true, accepts: timelineTypes.take, summary: "SemanticTake to calibrate." }], children: [{ tag: "Anchor", repeat: true, summary: "Empty at={MomentRef}, frame=<local frame>. At least one." }], outputs: [{ name: "take", type: timelineTypes.take, summary: "Calibrated SemanticTake." }] }, elaborate(node, ctx) {

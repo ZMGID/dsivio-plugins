@@ -140,8 +140,9 @@ export type Instant = {
 export type Window = { axisKey: string; consumerKey: string; leading: Instant; trailing: Instant; frames: Bounds };
 export type WindowExpression =
   | { kind: "during"; source: "program" | SegmentRef | SelectionRef }
-  | { kind: "at"; source: TimeLiteral | MomentRef; duration: TimeLiteral }
-  | { kind: "until"; source: TimeLiteral | MomentRef; duration: TimeLiteral }
+  /** expression retains an authored local offset; boundary is used only by direct range refs. */
+  | { kind: "at"; source: TimeLiteral | SemanticRef | "program"; duration: TimeLiteral; expression?: PointExpression; boundary?: "start" | "end" }
+  | { kind: "until"; source: TimeLiteral | SemanticRef | "program"; duration: TimeLiteral; expression?: PointExpression; boundary?: "start" | "end" }
   | { kind: "edges"; start: PointExpression; end: PointExpression; startSource?: SemanticRef; endSource?: SemanticRef };
 
 /** Round half up once, using exact rational arithmetic; output must remain a safe integer. */

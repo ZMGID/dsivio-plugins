@@ -48,7 +48,9 @@ dsivio-video comments list --run runs/main.dvrun [--workspace <root>]
 
 所有请求检查 Host：仅 localhost、127.0.0.1、[::1] 的合法端口表示，且必须等于当前监听端口；禁止后缀匹配、userinfo、多个 Host、DNS rebinding hostname。虽仅监听 IPv4，合法别名仍不改变绑定范围。所有写请求还要求 `Origin` 是本会话合法 loopback origin 且与该请求 Host 同源；若 `Sec-Fetch-Site` 存在，只接受 `same-origin`，不存在时仍必须 Origin + token。JSON 写仅接受 `application/json`，不接收 HTML form；OPTIONS/跨源写拒绝 403，绝不回复宽泛 CORS。无 Origin 的脚本不能冒充网页写接口；Agent 评论读取走 CLI/文件。
 
-主 UI CSP 限制到自身静态资源，禁止对象、frame 外站、内联事件、任意远程连接；带 nonce 的 import map/bootstrap 可执行，不能插入作者字符串为 HTML。编译后的 iframe 脚本是**可信内置模块**生成的画面程序，不是作者任意脚本插件执行环境；不把 session token 注入其中。RenderDocument 的现有 IR/样式/资源校验仍不可绕过。HTTP 不是公网协作产品，token 不声称防住已入侵的本机进程。
+主 UI CSP 限制到自身静态资源，禁止对象、frame 外站、内联事件、任意远程连接与动态代码求值；带 nonce 的 import map 可执行，不能插入作者字符串为 HTML。编译后的 iframe 脚本是**可信内置模块**生成的画面程序，不是作者任意脚本插件执行环境。既有 renderer 的 BrowserProgram setup 使用 Function 构造器，因此仅画面 document/preview 响应允许 `unsafe-eval`；主 UI 不允许。画面 iframe 必须使用 `sandbox="allow-scripts"`，**不**授予 `allow-same-origin`，以 opaque origin 隔离父页 DOM、内存 token 与写接口。桥接仅通过白名单 postMessage RPC：父页同时核对准确 iframe `event.source` 与 `event.origin === "null"`；iframe 核对准确 parent source 与服务 URL 的 origin。不向 iframe 注入 token，所有写路由仍拒绝 `Origin: null`，bootstrap/JSON API 不开放 CORS。已注册素材 GET 为 opaque iframe 的字体读取，仅在请求 `Origin: null` 时回复精确 `Access-Control-Allow-Origin: null`；它不授予凭证或任何写权限。RenderDocument 的现有 IR/样式/资源校验仍不可绕过。`src/studio/server.test.ts` 用真实浏览器和内置 Program 证明画面就绪、父页/bootstrapping token 不可读，且即使传入真实 token 的跨源写预检仍为 403。HTTP 不是公网协作产品，token 不声称防住已入侵的本机进程。
+
+document/preview 的 HTML 响应还在 CSP 中声明 `sandbox allow-scripts`，因此直接打开无 shim 的 `/__studio/html` 也保持 opaque origin，而不是仅依赖 UI iframe 属性。上述真实浏览器回归同样验证直接打开 HTML 后 bootstrap 不可读。
 
 素材只从本会话已注册 `ResourceRef`/产物所有者白名单取字节；不接受 file URL、绝对路径或拼接请求路径访问磁盘。Source 写每次检查 realpath/父目录，必须在 workspace 内且在已加载源码闭包中，拒绝 symlink 逃逸和目录/特殊文件。
 
@@ -435,3 +437,27 @@ ready attributes 是真实 readiness，不在 loading/error 随便设置。截�
 | screenshot/snapshot | 保留现有 document/material snapshot 合同与本地 renderer；UI screenshot 用已有 capture，不增截图 Build |
 
 本文未读取旧 hypit 实现目录；来源是本项目研究规格与现有编译/计划/机器/模块/Result/抓帧合同。新增 UI npm pins 已查询 npm 元数据；未安装或实现。
+
+## 13. 实现与验收记录
+
+已落地的实现不再是第 11 节的接口草图：
+
+- `src/studio/session.ts` 统一持有版本化编译、显示闭包和发布；`cache.ts` 与已有 Build executor 共享本地执行规则。付费 Need 缺失时显式报错，Studio 不提交付费请求。
+- `compileAuthorDetailed` 在同一编译遍历产生作品图与精确 UTF-16 AuthoringIndex；结构化字段和时间手势只写有真实端点的源码，以源码版本/CAS、overlay 编译校验和原子发布保护旧内容。共享 Recipe/Window 保持实际声明归属，不复制到每个消费者。
+- 16 个 colocated Companion 提供语义、材料、参数 owner 与消费者输入端口血缘；Ranking 音效先从实际 `instants/windows` 输入取得时机，再投影为只读 `visual-trigger`，不制造可编辑的输入端口。
+- 原生 ESM Preact/htm UI、简体中文/English、独立 AudioTrack/本地音频准备、源码自由保存、Comments 和 Build/Artifacts 库均已接到实际服务器。评论使用独立文件版本，不把源码版本当评论版本；显示名修改属于输出清单，不改变 Candidate。
+- 预览文档以 opaque-origin sandbox 执行可信内置 BrowserProgram；主 UI 不开放 eval，预览 iframe 的 renderer 所需 eval 不授予同源或会话 token 权限。实际 Chromium 安全回归覆盖直接预览文档和父页面隔离。
+- VideoSamplingMap 的有效空隙表示无画面：暂停并隐藏对应视频，下一片段激活时恢复作者 visibility；缺 map/资源/解码仍报错。真实双 Member Sequence 回归检查 `0→29→30→59→0` 的画面可见性、解码时间与静音暂停状态。
+
+本轮集成修正后，两套 TypeScript 检查通过；当时全套 **474/474** 测试通过、无跳过。随后发现并修正 Timeline 可用高度和窄标签显示问题；这两项的最终验证另记，不把此前 474 项结果当作后续改动的证明。
+
+真实运行证据：主集成在一次性 canonical 副本启动 Studio，`capture screenshot` 得到 `/tmp/main-studio.png`（1440×960）与 `/tmp/main-studio-tall.png`（1600×1400）；页面显示实际香水视频、1080×1920、15 秒、30/1 fps、450 帧和语义时间线。各包另以一次性项目验证源码字段/时间编辑、评论冲突、产物显示名与 Sequence 空隙；源码仓库中的 canonical 不是验收写入目标。Compound record/list/color 控件具有隔离 UI 与精确源码事务测试，但并未逐种完成真实领域数据的浏览器写回验收，不能声称该矩阵全部已通过。
+
+Timeline 收尾验证：默认高度为约 42% viewport、上限 420px；保留可拖动/记忆边界并新增可聚焦分隔条，窄窗口为 stage 留至少 160px。真实 Chromium layout/Sequence/audio scoped 测试 7 项通过；标签边界测试 3 项通过，完整文本与两侧 padding 放不下时不绘制文字，hover 和足够 zoom 仍显示原内容。最终浏览器检查 `/tmp/main-studio-final-default.png`（1440×960）能同时看到 Sound/Uses/Performance/Uses/Typography 与真实预览，不再出现窄词标签叠字。
+
+主集成实际通过 Inspector 将一次性项目 `main.dvml#picture` 的 `left="0%"` 改为 `left="1%"`，Enter 提交后读盘确认其余 Frame 属性保持 `top="0%" right="100%" bottom="100%"`，预览重新就绪。此项是实际 grouped-attribute 写回，不代替所有 compound record/list 的领域验收。
+
+第 6 阶段联验补充：真实中文 WhisperX 词时间证据经 SemanticTake/Timeline 渲染为 320×240、85 帧 MP4；Studio 读取已接受的 Take，不在预览中重新提交生成。浏览器将一次性 `look.dvs#caption.base` 的 fill 改为 `#22FFAA`，并通过嵌套 record 设置 gradient-from `#22FFAA` / gradient-to `#4466FF`，读盘确认属性与花括号完整；截图 `/tmp/dsivio-video-phase6-studio-gradient.png`。随后把实际入画的 Image transform 程序列表从 Resize → Rotate 重排为 Rotate → Resize，点“应用”后读盘确认 `.dvml` 的操作顺序改变、预览重新就绪；截图 `/tmp/dsivio-video-phase6-studio-list.png`。这补齐了实际 color/record/list 的代表性写回证据，不替代全部组件组合的穷举验收。
+
+接入边界经用户再次确认：默认由项目聊天中的 Agent 调用 check/plan/build；Studio 为可选本地预览与评审，不增加 Dsivio 原生内嵌页。这些截图证明自写实现的运行结果，**不是已完成 Hypit 原界面视觉对照的证据**。
+

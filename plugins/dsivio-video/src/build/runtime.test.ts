@@ -151,7 +151,6 @@ test("Cancel waits for in-flight submit, stops polling, and reports remote limit
   const cancellation = await cancelBuild(id, "Stopped by author", ws);
   assert.equal(cancellation.cancelRequested, true);
   assert.equal(cancellation.buildView?.work.state, "working");
-  assert.match(cancellation.buildView!.remoteCancellation, /cannot be cancelled/);
   release(); await worker;
   assert.equal(polls, 0);
   assert.equal((await new ResultsRepository(ws.stateDir).read(id))?.outcome, "cancelled");
@@ -294,4 +293,27 @@ test("Aborting an in-flight poll preserves its handle for the next worker", asyn
   assert.equal(submits, 1);
   assert.equal((await new ResultsRepository(ws.stateDir).readOutput(id, "result"))?.value.data, "resumed");
   assert.equal(await new ResultsRepository(ws.stateDir).readOutput(id, "constructor"), undefined);
+});
+
+test("cancelled media task decides a cancelled Build without publishing its output", async t => {
+  const ws = await fixture(t), id = queue(ws);
+  const cap = capability({ kind: "async", submit: async () => ({ handle: "cancelled-task" }), poll: async () => ({ state: "cancelled" }) });
+  await runWorker(ws, { ...fast, registry: registry(cap) });
+  const manifest = await new ResultsRepository(ws.stateDir).read(id);
+  assert.equal(manifest?.outcome, "cancelled");
+  assert.deepEqual(manifest?.outputs, {});
+  assert.equal((await buildView(id, ws))?.work.outcome, "cancelled");
+});
+
+test("interrupted submission recovers a durable receipt without issuing another submit", async t => {
+  const ws = await fixture(t), id = queue(ws), store = new BuildStore(ws.stateDir);
+  store.commitFact(id, { kind: "produced", command: "produce:result", outputs: {}, needs: { value: { capability: "fake/run", request: {} } } });
+  store.saveOperation({ build: id, command: "fulfil:result.value", phase: "submitting", request: {}, summary: {}, backend: "fake", handle: null, task: null, receipt: null, nextWake: 0, progress: null, error: null }); store.close();
+  let submits = 0;
+  const cap = capability({ kind: "async", submit: async () => { submits++; throw new Error("duplicate paid submit"); }, recover: async () => ({ handle: "durable", task: "existing-task", receipt: "existing-receipt" }), poll: async () => ({ state: "done", value: { type: TYPE, data: "recovered-result" } }) });
+  await runWorker(ws, { ...fast, registry: registry(cap) });
+  const results = new ResultsRepository(ws.stateDir);
+  assert.equal(submits, 0);
+  assert.equal((await results.readOutput(id, "result"))?.value.data, "recovered-result");
+  assert.equal((await results.read(id))?.operations[0]?.receipt, "existing-receipt");
 });

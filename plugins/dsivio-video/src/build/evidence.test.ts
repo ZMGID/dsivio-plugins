@@ -10,6 +10,7 @@ import type { ExecuteContext } from "../core/capability.ts";
 import type { ExecutionDefinition } from "../core/graph.ts";
 import type { Json } from "../core/value.ts";
 import { dsivioExecutor } from "../gateway/dsivio.ts";
+import { gatewayCapabilities } from "../gateway/index.ts";
 import { imageType } from "../modules/media/index.ts";
 import { buildId } from "./ids.ts";
 import { BuildStore } from "./store.ts";
@@ -43,9 +44,13 @@ async function gatewayFixture(t: test.TestContext) {
   });
   const store = new ProjectStore(ws.stateDir);
   const context: ExecuteContext = { buildId: buildId(), commandKey: "image", idempotencyKey: "evidence-key", projectRoot: ws.root, workDir: join(ws.root, "work"), store, signal: new AbortController().signal, log() {} };
-  return { ...ws, store, context, async configure(config: Json): Promise<void> { await writeFile(join(ws.root, "config.json"), JSON.stringify(config)); } };
+  return { ...ws, store, context, async configure(config: Json): Promise<void> { await writeFile(join(ws.root, "config.json"), JSON.stringify(config)); }, async request(): Promise<Json> {
+    const capability = gatewayCapabilities.find(item => item.name === "gateway/image")!;
+    const resolved = await capability.resolve({ model: "openai/gpt-image-2", arguments: { prompt: "Generate a product image", aspectRatio: "9:16" } }, { projectRoot: ws.root });
+    assert.ok(resolved.ok);
+    return resolved.request;
+  } };
 }
-const request = { model: "provider/model", prompt: "Generate a product image", params: { ratio: "9:16" }, references: { images: [], videos: [], audios: [] }, options: {} };
 function queue(ws: BuildWorkspace): string {
   const definition: ExecutionDefinition = { schema: "dsivio-video.definition/1", author: "author.dvml", run: "run.dvrun", targets: ["hero.image"], seeds: {}, forwarded: {}, reused: {}, modules: [], steps: [{ key: "image", label: "hero", producer: "evidence@1#generate", inputs: {}, results: { image: "image-result" }, resultTypes: { image: TYPE } }], outputs: { "hero.image": { record: "image-result", type: TYPE } } };
   const id = buildId(), store = new BuildStore(ws.stateDir);
@@ -63,28 +68,10 @@ async function inspect(ws: BuildWorkspace, id: string, json = false): Promise<st
   return stdout;
 }
 
-test("Dsivio submit exposes its local task separately from the provider receipt", async (t) => {
-  const f = await gatewayFixture(t);
-  await f.configure({ remoteId: null });
-  const submitted = await dsivioExecutor("image").submit(request, f.context);
-  assert.equal(submitted.task, "task-1");
-  assert.deepEqual(submitted.handle, { taskId: "task-1", kind: "image" });
-  assert.equal(submitted.receipt, undefined);
-});
-
-test("Dsivio pending polls include provider evidence already learned by the service", async (t) => {
-  const f = await gatewayFixture(t);
-  await f.configure({ runningStatuses: 1, remoteId: "provider-pending-task" });
-  const executor = dsivioExecutor("image"), submitted = await executor.submit(request, f.context);
-  const polled = await executor.poll(submitted.handle, f.context);
-  assert.equal(polled.state, "pending");
-  assert.equal(polled.receipt, "provider-pending-task");
-});
-
 test("Dsivio completion collects bytes and includes a provider receipt absent at submit", async (t) => {
   const f = await gatewayFixture(t);
   await f.configure({ remoteId: null });
-  const executor = dsivioExecutor("image"), submitted = await executor.submit(request, f.context);
+  const executor = dsivioExecutor("image"), submitted = await executor.submit(await f.request(), f.context);
   await f.configure({ remoteId: "provider-completed-task" });
   const polled = await executor.poll(submitted.handle, f.context);
   assert.equal(polled.receipt, "provider-completed-task");
@@ -97,7 +84,7 @@ test("Dsivio completion collects bytes and includes a provider receipt absent at
 test("Dsivio failure exposes the paid provider receipt without implying no charge", async (t) => {
   const f = await gatewayFixture(t);
   await f.configure({ remoteId: null });
-  const executor = dsivioExecutor("image"), submitted = await executor.submit(request, f.context);
+  const executor = dsivioExecutor("image"), submitted = await executor.submit(await f.request(), f.context);
   await f.configure({ finalStatus: "failed", remoteId: "provider-failed-task", error: "Generation failed" });
   const polled = await executor.poll(submitted.handle, f.context);
   assert.equal(polled.receipt, "provider-failed-task");

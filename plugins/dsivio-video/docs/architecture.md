@@ -142,6 +142,17 @@ ffmpeg、ffprobe、yt-dlp、Chrome Headless Shell、Python 的查找顺序：
 - Dsivio 模式：Dsivio 在「媒体创作」里把它作为一个本地提供方，使用 dsivio-video 时自动安装，也可在设置里手动安装；由 Dsivio 启停。
 - 独立模式：插件自己安装和启停。
 
+### 2.5 Studio 的实际归属
+
+`src/studio/session.ts` 持有一次 Studio 会话的编译版本、显示闭包与发布状态；HTTP/SSE 服务只暴露带版本的快照与受 token/Host/Origin 保护的编辑入口。显示准备复用 Build executor 和本地缓存，不创建第二套生成队列，也不在预览中提交付费 Need。
+
+`compileAuthorDetailed` 同一遍历产生作品图和 AuthoringIndex，记录精确 UTF-16 源码位置、真实引用及消费者输入端口。各模块 colocated `studio.ts` 提供领域事实、参数 owner 与允许的时间逆变换；通用 Inspector/Timeline 不按领域硬编码写源码。编辑先校验来源版本与 overlay 编译，成功再原子发布；共享 Recipe/Window 修改归原声明。
+
+浏览器采用原生 ESM Preact/htm，共享 state/api/transport；预览在不授予同源权限的 sandbox iframe 中运行可信内置 renderer，主 UI 的会话 token 不传给预览。独立 AudioTrack 播放与视频解码就绪一起控制 transport。Timeline 的可拖边界保存用户高度，小窗口为 stage 留出空间；窄 band 仍保留几何与可选中区域，只隐藏放不下的标签，hover/zoom 显示内容。
+
+评论持久化在独立 `FEEDBACK.json`，拥有自己的版本与冲突检查；任务/产物库读取既有 BuildStore/ResultsRepository，显示名属于输出清单，不修改 Candidate 或生成请求。实现/实测记录见[第 5 阶段 §13](design/phase5.md#13-实现与验收记录)。
+
+
 ## 3. Dsivio 侧需要的改动
 
 | 改动 | 目的 |

@@ -26,7 +26,7 @@ Normalize 必填 id/source；clock 与 frame-rate 恰一个。策略选 recipe �
 </time:Timeline>
 ```
 
-这是依赖片段，先声明/import 对应模块、clock、story 的空 silent 段和 shot.video。带词段 SemanticTake 必填 language（如 zh），空段禁止无用 language，不调用对齐。CLI transcript 是分析证据，不是精确对齐 Evidence。
+这是依赖片段，先声明/import 对应模块、clock、story 的空 silent 段和 shot.video。带词段 SemanticTake 必填 language（如 zh）；可选 model 指定实际目录中的 transcribe 模型，省略为 `local/whisperx-small`。需要云转写时显式选择已启用的模型，后端与描述在 plan 时冻结，执行失败不换成本地模型。空段不调用对齐，不添加无用 language/model。CLI transcript 是分析证据，不是精确对齐 Evidence；未测到的词边界不会变成伪造的精确时间。
 
 需要裁切或变速时在 SemanticTake 前使用 pipeline:Transform 的 Trim/Retime：id/source 必填；Trim 用局部整数 start-frame/end-frame-exclusive，Retime 用正整数或整数比值 speed，preserve-pitch 固定 true。别将已对齐 Take 改长短。
 

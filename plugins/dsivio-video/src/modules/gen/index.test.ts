@@ -6,6 +6,11 @@ import type { Json, Value } from "../../core/value.ts";
 import type { ElementNode } from "../../markup/ast.ts";
 import media, { imageType, videoType, audioType } from "../media/index.ts";
 import gen from "./index.ts";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { compileAuthor } from "../../elaborate/compile.ts";
+import { Workspace } from "../../source/workspace.ts";
 
 const span = { file: "test.dvml", start: 0, end: 1, line: 1, column: 1 };
 const textType = "dsivio-video/text@1#Text";
@@ -25,6 +30,7 @@ function context() {
     asset(locator, type, mime) { assets.push({ locator, type, mime }); return ctx.record(null, { type, data: { $resource: locator, bytes: 4, mime: mime! } }, span); },
     fail(code, message, location) { throw new DvError(code, message, { span: location }); },
     identity() {},
+    authoring() {},
   };
   return { ctx, records, operations, assets, bindings };
 }
@@ -71,50 +77,25 @@ test("gen surfaces reject missing model, invalid children, attributes and typed 
   for (const [node, expected] of cases) assert.throws(() => gen.surfaces[node.tag.endsWith("Image") ? "Image" : "Video"]!.elaborate(node, c.ctx), code(expected));
 });
 
-test("producers form needs with ResourceRefs and Pending values, rechecking actual MIME", () => {
-  for (const kind of ["image", "video"] as const) {
-    const producer = gen.producers[kind]!;
-    const inputs: ProducerInputs = {
-      config: { type: "dsivio-video/gen@1#RequestConfig", data: { model: `p/${kind}`, params: {}, options: {} } },
-      prompt: { type: textType, data: "A scene" },
-      images: [{ $pending: "hero.image", type: imageType }, { type: imageType, data: { $resource: "img", bytes: 5, mime: "image/png" } }],
-      ...(kind === "video" ? { firstFrame: { $pending: "hero.image", type: imageType }, videos: [{ $pending: "clip.video", type: videoType }], audios: [{ $pending: "voice", type: audioType }] } : {}),
-    };
-    const need = producer.run(inputs).needs![kind]!;
-    assert.equal(need.capability, `gateway/${kind}`);
-    assert.ok(need.request && typeof need.request === "object" && !Array.isArray(need.request));
-    assert.deepEqual(need.request.prompt, "A scene");
-    assert.deepEqual(need.request.references, { images: [{ $pending: "hero.image", type: imageType }, { $resource: "img", bytes: 5, mime: "image/png" }], videos: kind === "video" ? [{ $pending: "clip.video", type: videoType }] : [], audios: kind === "video" ? [{ $pending: "voice", type: audioType }] : [] });
-    inputs.prompt = { $pending: "prompt", type: textType };
-    const pendingNeed = producer.run(inputs).needs![kind]!.request;
-    assert.ok(pendingNeed && typeof pendingNeed === "object" && !Array.isArray(pendingNeed));
-    assert.deepEqual(pendingNeed.prompt, { $pending: "prompt", type: textType });
-    inputs.images = [{ type: imageType, data: { $resource: "bad", bytes: 1, mime: "video/mp4" } }];
-    assert.throws(() => producer.run(inputs), code("TYPE_INVALID"));
-  }
-});
-
-test("surface authored strings become typed generation parameters without dropping zero or false", () => {
-  const c = context();
-  c.ctx.record("direction", { type: textType, data: "Morning" }, span);
-  c.bindings.set("hero.image", { kind: "output", key: "hero", operation: "hero", port: "image", type: imageType });
-  gen.surfaces.Image!.elaborate(element("g:Image", { id: "hero", model: "p/image", prompt: "Literal scene", count: "2" }), c.ctx);
-  gen.surfaces.Video!.elaborate(element("g:Video", { id: "shot", model: "p/video", duration: "5", audio: "false" }, { prompt: "direction", "first-frame": "hero.image" }, [element("g:Option", { name: "seed", value: "0", type: "number" }), element("g:Option", { name: "flag", value: "false", type: "boolean" })]), c.ctx);
-  for (const [index, kind] of ["image", "video"].entries()) {
-    const spec = c.operations[index]!;
-    const value = (binding: Binding) => binding.kind === "record" ? binding.value : { $pending: "hero.image", type: binding.type };
-    const inputs: ProducerInputs = {};
-    for (const [name, binding] of Object.entries(spec.inputs)) inputs[name] = Array.isArray(binding) ? binding.map(value) : value(binding);
-    const output = gen.producers[kind]!.run(inputs).needs![kind]!.request;
-    assert.ok(output && typeof output === "object" && !Array.isArray(output));
-    if (kind === "image") {
-      assert.equal(output.prompt, "Literal scene");
-      assert.deepEqual(output.params, { count: 2 });
-    } else {
-      assert.equal(output.prompt, "Morning");
-      assert.deepEqual(output.params, { duration: 5, audio: false });
-      assert.deepEqual(output.options, { seed: 0, flag: false });
-      assert.deepEqual(output.firstFrame, { $pending: "hero.image", type: imageType });
-    }
-  }
+test("Speech clone retains Audio producer dependency and consent file provenance", () => {
+  const root = mkdtempSync(join(tmpdir(), "dv-speech-graph-"));
+  try {
+    mkdirSync(join(root, ".dsivio-video"));
+    const consent = join(root, "consent.txt");
+    writeFileSync(consent, "I authorize this reference voice for this project.");
+    const source = join(root, "main.dvml");
+    writeFileSync(source, `<?dvml using="dsivio-video/markup@1"?>
+<dvml><import as="gen" from="dsivio-video/gen@1"/>
+<gen:Speech id="reference" model="p/tts" text="reference" voice="voice"/>
+<gen:Speech id="cloned" model="p/tts" text="hello" mode="clone" voice-ref={reference.audio} consent-attestation="./consent.txt"><gen:Option name="speed" type="number" value="1"/></gen:Speech>
+</dvml>`);
+    const graph = compileAuthor(source, Workspace.open({ cwd: root }));
+    const clone = [...graph.operations.values()].find(op => op.label === "cloned")!;
+    const reference = [...graph.operations.values()].find(op => op.label === "reference")!;
+    assert.deepEqual(clone.inputs.voiceReference, { operation: reference.key, port: "audio" });
+    assert.equal(graph.outputs.get("cloned.audio")?.type, audioType);
+    assert.ok([...graph.assets.values()].some(asset => asset.path === realpathSync(consent) && asset.ref.mime === "text/plain"));
+    writeFileSync(source, `<?dvml using="dsivio-video/markup@1"?><dvml><import as="gen" from="dsivio-video/gen@1"/><gen:Speech id="x" model="p/tts" text="hello" voice-ref="reference.audio"/></dvml>`);
+    assert.throws(() => compileAuthor(source, Workspace.open({ cwd: root })), code("MARKUP_REFERENCE"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

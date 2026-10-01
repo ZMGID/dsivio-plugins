@@ -72,10 +72,27 @@ export function projectWindow(timeline: Timeline, expression: WindowExpression, 
     leading = projectInstant(timeline, { kind: "expression", expression: expression.start, ...(expression.startSource ? { source: expression.startSource } : {}) }, consumerKey);
     trailing = projectInstant(timeline, { kind: "expression", expression: expression.end, ...(expression.endSource ? { source: expression.endSource } : {}) }, consumerKey);
   } else {
-    const source = expression.source; const authored = typeof source === "string" ? source : "moment.cue";
-    const point = resolvePoint(timeline, authored, typeof source === "string" ? undefined : source); const duration = durationFrames(expression.duration, timeline.clock);
+    const source = expression.source;
+    let authored: string;
+    if (expression.expression !== undefined) {
+      if (expression.boundary !== undefined || typeof source === "string" && source !== "program") throw new DvError("TIME_BINDING", "Expression windows require a matching semantic or program source");
+      authored = expression.expression;
+      if (source === "program" && !authored.startsWith("program.")) throw new DvError("TIME_BINDING", "Program source requires a program expression");
+    } else if (typeof source === "string") {
+      if (source === "program" || expression.boundary !== undefined) throw new DvError("TIME_BINDING", "Direct absolute windows require a time literal without boundary");
+      authored = source;
+    } else if (source.kind === "moment") {
+      if (expression.boundary !== undefined) throw new DvError("TIME_BINDING", "Moment windows do not accept boundary");
+      authored = "moment.cue";
+    } else {
+      if (expression.boundary !== "start" && expression.boundary !== "end") throw new DvError("TIME_BINDING", "Direct range windows require an explicit boundary");
+      authored = `${source.kind}.${expression.boundary}`;
+    }
+    const point = resolvePoint(timeline, authored, typeof source === "string" ? undefined : source);
+    const duration = durationFrames(expression.duration, timeline.clock);
     const shifted: ExactFrames = { numerator: point.value.numerator * duration.denominator + (expression.kind === "at" ? 1n : -1n) * duration.numerator * point.value.denominator, denominator: point.value.denominator * duration.denominator };
-    const fixed = instant(timeline, consumerKey, authored, point.value, point.origin, typeof source === "string" ? "local-offset" : "semantic-anchor");
+    const editAuthority = expression.expression !== undefined || typeof source === "string" ? "local-offset" : source.kind === "segment" ? "none" : "semantic-anchor";
+    const fixed = instant(timeline, consumerKey, authored, point.value, point.origin, editAuthority);
     const moving = instant(timeline, consumerKey, `${authored}${expression.kind === "at" ? "+" : "-"}${expression.duration}`, shifted, point.origin, "duration");
     leading = expression.kind === "at" ? fixed : moving; trailing = expression.kind === "at" ? moving : fixed;
   }

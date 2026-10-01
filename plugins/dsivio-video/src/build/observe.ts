@@ -79,7 +79,7 @@ export async function buildView(buildId: string, workspace: BuildWorkspace | str
         needs: { total: needTotal, done: facts.filter((fact) => fact.kind === "fulfilled").length }, steps: { total: stepTotal, done: stepDone } },
       result: { state: unavailable ? "unavailable" : result?.outcome ?? "missing", outputTotal: result ? Object.keys(result.outputs).length : 0 },
       operations: build ? operations.map((operation) => operationEvidence(build.definition, operation)) : result?.operations ?? [], operationGroups: groups, attention,
-      remoteCancellation: "Remote tasks cannot be cancelled by this runtime. Local cancellation does not stop remote tasks or imply a refund.",
+      remoteCancellation: "Build cancellation stops consuming media tasks; cancel an individual task explicitly through its gateway. It does not imply remote cancellation or a refund.",
       failure: result?.failure ?? (failure ? { code: failure.code, message: failure.message } : null),
     };
   } finally { store.close(); }

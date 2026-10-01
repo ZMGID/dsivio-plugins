@@ -1,6 +1,7 @@
 import { DvError } from "../../core/errors.ts";
 import { modules } from "../../modules/index.ts";
-import { runDsivio } from "../../gateway/dsivio.ts";
+import { gatewayModels } from "../../gateway/backend.ts";
+import type { MediaKind } from "../../gateway/request.ts";
 import type { CliOptions } from "../options.ts";
 import { stringOption, usage } from "../options.ts";
 import { openWorkspace } from "../project.ts";
@@ -8,14 +9,11 @@ import { result } from "../output.ts";
 export async function vocabularyCommand(options: CliOptions): Promise<number> {
   const workspace = openWorkspace(options);
   const kind = stringOption(options, "kind");
-  if (kind !== undefined && kind !== "image" && kind !== "video") usage("--kind must be image or video.");
+  if (kind !== undefined && !["image", "video", "speech", "transcribe", "matting"].includes(kind)) usage("--kind must be image, video, speech, transcribe or matting.");
   if (kind && !options.values.models) usage("--kind requires --models.");
   if (options.values.models) {
     if (options.positionals.length || options.values.tag) usage("--models cannot be combined with modules or --tag.");
-    const reply = await runDsivio(["media", "models", ...(kind ? ["--kind", kind] : [])], workspace.root, AbortSignal.timeout(10_000));
-    if (reply.code !== 0) throw new DvError(reply.code === 6 ? "GATEWAY_UNAVAILABLE" : "GATEWAY_MODELS_FAILED", reply.code === 6 ? "Open Dsivio to list live models." : `Model query failed: ${reply.stderr || reply.stdout}`);
-    const models: unknown = JSON.parse(reply.stdout);
-    if (!Array.isArray(models)) throw new DvError("GATEWAY_RESPONSE_INVALID", "Models must be an array.");
+    const models = kind === "matting" ? [] : await gatewayModels({ projectRoot: workspace.root, signal: AbortSignal.timeout(10_000) }, kind as MediaKind | undefined);
     result(options, { projectRoot: workspace.root, models }, models.map((model: unknown) => JSON.stringify(model)));
     return 0;
   }

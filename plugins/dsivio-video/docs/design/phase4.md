@@ -42,7 +42,7 @@
 | deck-track | DepthStack 卡片堆。research 记录的源实现缺陷（`*-step` 键被接受却读错键）按建议合同修正：`brightness-step` / `contrast-step` / `saturation-step` 真正生效，不带 `-step` 的键拒绝。 |
 | ranking | TierBoard、Column、TopThree；TopThree 的 terminal 只接受绝对时间或 Moment（共享 `decodeInstantAttributes` 的 `allow` 限制）。 |
 | comment-sticker / interview-emoji-reveal | 规格默认字重 680/850/650 按「四舍五入到 100」取 700/900/700 的精确字形，不合成字重；过短的动画阶段夹在寿命内。 |
-| screen-overlay | 全部 11 种全屏覆盖；Grain / TVStatic 用 128×128 循环噪声格，保持作者给定的格子尺寸；随机由固定 seed 决定，按帧号即可复现。 |
+| screen-overlay | 全部 11 种全屏覆盖；Grain / TVStatic 用 128×128 循环噪声格，保持作者给定的格子尺寸；Bokeh 数量约为 `amount × 48`，至少 1 个；随机由固定 seed 决定，按帧号即可复现。 |
 | image-compose / image-transform | 能力 `local/raster`，执行器 `services/raster/raster.py`（OpenCV + NumPy，单次短进程）。`dsivio-video setup raster` 在 `~/.dsivio-video/raster/1.0.0/venv` 用找到的 Python 3.12 安装 numpy 2.2.6、opencv-python-headless 4.12.0.88；PyPI 上 macOS arm64/x64、Windows 32/64、Linux x64/arm64 都有轮子，Windows ARM64 没有 OpenCV 轮子。alpha-over 像素实测与公式一致。 |
 
 共享层随本阶段的改动：

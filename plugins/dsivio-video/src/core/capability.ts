@@ -7,6 +7,8 @@ export interface ResolveContext {
   /** Project root (absolute). */
   projectRoot: string;
   signal?: AbortSignal;
+  /** Selected once during planning, then copied into the immutable Build. */
+  gatewayBackend?: "dsivio" | "standalone";
 }
 
 export type Resolution =
@@ -46,6 +48,7 @@ export interface ExecuteContext {
 export type PollResult =
   | { state: "pending"; retryAfterMs: number; progress?: string; receipt?: string }
   | { state: "done"; value: Value; receipt?: string }
+  | { state: "cancelled"; receipt?: string }
   | { state: "failed"; code: string; message: string; charged: "no" | "maybe"; receipt?: string };
 
 export interface ImmediateExecutor {
@@ -58,6 +61,8 @@ export interface AsyncExecutor {
   /** Submit once. `handle` must let `poll` find the same remote task after a worker restart. */
   /** `task` identifies the executor's public task; `receipt` identifies the underlying provider's task. */
   submit(request: Json, ctx: ExecuteContext): Promise<{ handle: Json; task?: string; receipt?: string }>;
+  /** Read a durable receipt after an interrupted submit. Never performs or retries a side effect. */
+  recover?(request: Json, ctx: ExecuteContext): Promise<{ handle: Json; task?: string; receipt?: string } | null>;
   /** Query only; never resubmits. On success it stores outputs in ctx.store and returns the typed value. */
   poll(handle: Json, ctx: ExecuteContext): Promise<PollResult>;
   cancel?(handle: Json, ctx: ExecuteContext): Promise<"confirmed" | "requested" | "unsupported" | "too-late">;

@@ -11,11 +11,14 @@ import { assembleAudioProgram } from "../../components/audio-track/program.ts";
 import { lowerAudio } from "../../components/audio-track/lower.ts";
 import { decodeAudioTrack, AUDIO_ITEM_ATTRIBUTES } from "../../components/audio-track/author.ts";
 import { identity } from "../../components/sound/validate.ts";
+import { audioTrackStudio, audioAuthorItems } from "./studio.ts";
+import { elaborateTrack } from "../sound/studio.ts";
 const audioTrack: ModuleDef = {
   id: "dsivio-video/audio-track@1", summary: "Independent explicitly normalized audio placements, native phase, loops, pitch-preserving stretch and audible-interval fades.",
+  studio: [audioTrackStudio],
   types: { Plan: { summary: "Author audio placement plan.", validate: validateAudioPlan }, Program: { summary: "Resolved audio source windows.", validate: validateAudioProgram } },
   surfaces: {
-    Track: { mode: "structured", doc: { summary: "At least one Item; no visual output.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Identity." }, { name: "timeline", required: true, accepts: timelineTypes.timeline, summary: "Target program." }], children: [{ tag: "Item", repeat: true, summary: "Independent normalized audio placement." }], outputs: [{ name: "program", type: audioTrackTypes.program, summary: "Inspectable placement program." }, { name: "audio", type: renderTypes.audio, summary: "Terminal audio track." }] }, elaborate: decodeAudioTrack },
+    Track: { mode: "structured", doc: { summary: "At least one Item; no visual output.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Identity." }, { name: "timeline", required: true, accepts: timelineTypes.timeline, summary: "Target program." }], children: [{ tag: "Item", repeat: true, summary: "Independent normalized audio placement." }], outputs: [{ name: "program", type: audioTrackTypes.program, summary: "Inspectable placement program." }, { name: "audio", type: renderTypes.audio, summary: "Terminal audio track." }] }, elaborate(node, ctx) { elaborateTrack(node, ctx, decodeAudioTrack, audioAuthorItems); } },
     Item: { mode: "structured", doc: { summary: "Complete W required. Trims independently default to zero/source end; once/loop align either edge; stretch requires both rate bounds; gain 0..64; fades fit actual audible span.", attributes: AUDIO_ITEM_ATTRIBUTES.map(name => ({ name, required: name === "source", accepts: name === "source" ? timelineTypes.media : "text", summary: name })), outputs: [] }, elaborate(node, ctx) { ctx.fail("AUDIO_CHILD", "Item belongs inside audio-track:Track.", node.span); } },
   },
   producers: {

@@ -77,6 +77,7 @@ dsivio media models [--kind image|video|speech|transcribe|matting] [--json]
   }
 }
 ```
+**W1 冻结说明**：图像/视频描述遵循以上外形。`factsRevision` 是移除 `factsRevision` 本身后，按 [RFC 8785 / JCS](https://www.rfc-editor.org/rfc/rfc8785) 规范化的 UTF-8 JSON 的 SHA256（`sha256:` + 小写 64hex）；客户端原样保存/回传，不依赖普通 `JSON.stringify` 的对象插入顺序或浮点词法。条件的精确 JSON 是 `{"provided":"argumentName"}`、`{"equals":{"argument":"argumentName","value":false}}`、`{"all":[condition,...]}`、`{"any":[condition,...]}`、`{"not":condition}`。`firstFrame` / `lastFrame` 为至多一个条目的 `mediaList`；旧 `--first-frame` / `--last-frame` 字符串 flag 在宿主边界转换为单条列表。`size` 的有限扩展事实 `pixelDimensions:true` 表示除了 `allowed` 的尺寸档位也接受 `WIDTHxHEIGHT` 正整数字符串；具体几何限制由图像 route 的真实尺寸编码器付费前验证，不能声称任意像素都可发送。旧 snake_case `aspect_ratio` / `output_format` 仅为输入 alias，规范描述公布 `aspectRatio` / `outputFormat`；两种拼法同时提供必须拒绝。既有 xAI `voiceIds` 以 `mediaList` + `opaqueSources:true` 表达，条目的 source 是该供应商的既有 voice ID，不是文件；仅实际支持该参考路线时公开，最多 3 项且不能请求无声。图像/视频的厂商未证实限制通过 `factsComplete:false` / `unknownFacts` 如实表达，不把现有 route 实现当成厂商完整事实。ComfyUI 描述来自实际工作流绑定，仅公布已声明节点参数与已绑定的公共端口；私有 graph 默认值、未知产物数量/格式不公开，标记 `workflowDefaults` / `workflowProducts` 并省略未知的 products 上限/MIME 域，不用 0 冒充无限。
 
 这是拟定契约实例，不是当前 CLI 输出。speech 的 kind 是操作名，products.mediaKind 是媒体 MIME 类别。raw pcm 不作为首批可交付格式：无容器/采样信息的文件不是插件 Audio Artifact；不能偷偷给 pcm 请求包装 WAV。`voice` 的系统音色域来自适配器公开枚举，用户 clone voice ID 另按 provider 归属校验；上述缩写实例不展开全部音色。字符上限若官方未说明计数方式，适配器须保守校验并标记 `factsComplete:false` / `unknownFacts:["text.lengthUnit"]`，不能把代码点计数声称为厂商事实；本地规范单位始终显式，厂商仍可拒绝。
 
@@ -109,7 +110,7 @@ transport 中 token 仍由 CLI 内部加入，不出现在命令/日志。**外�
 5. 标准已有限制迁入描述：如图片 n≤4 保持适用的现有路线约束，而不是统一强制阻止新 MiniMax n≤9。模型/协议求交仍在现有 image/video route owner；它们生成 description，旧 capabilities 从 description 投影。参数规则不再由 CLI、UI 和 provider 各维护一套。
 6. 同批改变所有真实消费者及生成 TS 契约；不另留 old/new executor。首批新增参数实证至少覆盖 OpenAI 图像 background/outputFormat、MiniMax 图像 seed=0（独立后端）、speech speed/instruction。其余 research/09 差距逐路由公开已实现部分，不能宣称整张原模型表全部可执行。
 
-所属 ADR：§8 ADR 0010 的「描述与输入」条款。设置 UI：模型详情展示实际参数和不完整事实；媒体页不新增任意原始 vendor JSON 输入，普通用户控件由 descriptor 生成，选 false 与默认分开。测试：未知/拼错键、body 保留 false/0、重复 alias、auto 时长、条件存在性、共享配额、description 更新拒交、已知 route 无映射拒交；真实付费调用检查服务产物格式，而非只断言 mock 转发。
+所属 ADR：§8 ADR 0010 的「描述与输入」条款。W1 的 consumer 是 CLI 与插件；设置模型详情/descriptor 生成控件**不在 W1 范围**，媒体页不新增任意原始 vendor JSON 输入。测试：未知/拼错键、body 保留 false/0、重复 alias、auto 时长、条件存在性、共享配额、description 更新拒交、已知 route 无映射拒交；真实付费调用检查服务产物格式，而非只断言 mock 转发。
 
 ## 3. Dsivio speech：TTS 与参考音频克隆
 
@@ -485,7 +486,7 @@ setup按以下确定步骤，不伪造Install hook：
 1. 读取当前project root、`dsivio tools --json`，定位bundled Node/npm/ffmpeg/ffprobe/Python。检查Node≥22.18（插件P/package.json:11–13）。缺bundled npm提示升级此版Dsivio，不切到未知system Node。
 2. 以catalog同步的release commit从ZMGID/dsivio-plugins下载快照，只抽 `plugins/dsivio-video/`；对路径/symlink作同类安全校验。在项目 **`.dsivio-video-plugin/releases/<commit>`** 部署CLI源码及package-lock/services，临时目录成功后rename；不覆盖用户 `.dsivio-video/` 构建数据或hypit目录。`active.json` 原子记录commit/root/node/lockHash，由setup管理；升版失败保留旧release。
 3. cwd=release root，通过spawn无shell执行：
-   `"<tools.node>" "<tools.npm>" install --omit=dev --no-audit --no-fund`。
+   `"<tools.node>" "<tools.npm>" ci --omit=dev --no-audit --no-fund`。使用lockfile-exact的`ci`而不是可能重写发布锁的`install`；lock与manifest不匹配直接失败。
    把bundled Node目录前置到该子进程PATH，保证依赖postinstall使用同一Node，保留native optional依赖，不能 `--ignore-scripts` 后虚称sharp可用。以发布package-lock为准，安装后若lock改变或实际依赖版本不匹配则失败，不擅自升级。安装的是P/package.json production deps，包括HyperFrames、Puppeteer/core、sharp（`:18–24`），不是只安装CLI空wrapper。
 4. 使用这个Node和`bin/dsivio-video.mjs`，实际 `doctor --json`；按需要显式 `setup browser`/fonts/raster，验证native依赖、最小snapshot/短片出文件。ASR不在市场安装阶段下载，settings可manual，首次transcribe由App自动安装。仅检查config存在不算ready。
 5. 项目内创建确定入口/说明，Agent始终以active.json中Node+bin绝对路径启动，worker沿用process.execPath；不要求全局npm link、不修改系统PATH。入口由setup实现可重复更新，用户项目内容不覆盖。错误输出保留失败阶段与日志路径，不留一个假“已就绪”。
@@ -524,3 +525,40 @@ setup按以下确定步骤，不伪造Install hook：
 - 抠像：本阶段仅验证导入透明图/视频合成不丢alpha；**不把这项算作matting paid generation通过**。
 
 发布门槛不是“已有377个测试仍绿”：新增接口必须由真实CLI/桌面surface/产物证明。权限或供应商产品未开通属于验收前置，报告明确账户/接口/失败事实，不能用mock把该供应商标成完成。本文设计本身只做静态文档与引用核验，不声称已执行上述安装、付费或UI验收。
+
+## 11. 实施证据与尚缺的验收前置
+
+本节记录实施阶段的证据；前面的接口设计不因此自动成为全部已验收能力。
+
+### 11.1 本地 ASR 协议与生命周期
+
+插件的服务源码与 TypeScript owner 已改为带 nonce 的受监督协议：`--token-file`、stdout ready 身份、loopback Host 与浏览器 Origin 拒绝、标准 WAV/sampleFrames 校验；停止/取消必须确认自己持有的 child 已退出。磁盘 run 信息不授予接管或杀进程权限。安装在隔离 staging 中准备后再原子激活，失败/取消保留旧配置。
+
+当前源码的真实 WhisperX 3.8.6 `small/cpu/int8` 离线运行结果：
+
+- 中文 44,851 个 16kHz 样本，识别“今天我们来试一下语音识别。”；首词“今”时间 0.051–0.254 秒，score 0.992。
+- 英文 58,885 个样本，识别“Today we are testing speech recognition with word timestamps.”；首词 Today 时间 0.031–0.292 秒，score 0.882。
+- 实际推理取消后确认受监督 child 退出；下一次中文推理成功重新启动；shutdown 和监督者结束均确认无存活 child。真实 venv 安装取消删除 staging 并保留既有配置。
+- 最终 scoped client/service 测试 21 项通过，包含云转写的真实 Host 返回形状、安装切换和冻结模型漂移；此前 Python 协议测试 4 项通过。云结果不要求本地 WhisperX 版本字段，缺失词时间仍保留缺失，不编造样本边界。
+- 真正的缓存生命周期验证：安装身份改变时只重启自己持有的空闲 child，并观察旧 child 退出；busy 时拒绝切换。请求冻结 `small` 后，安装配置变成 `base` 会在推理前拒绝；取消确认退出后，重新识别中文成功。
+- Host 原生隔离安装完成 bundled Python venv 与固定依赖安装，但新目录的 `small/en/zh` 模型准备超过 1800 秒，返回 `ASR_INSTALL_TIMEOUT`；已杀停并等待 owned child，不激活失败环境。**空缓存完整安装未通过**，既有缓存的离线成功不能代替该结果。
+
+插件侧协议和 owner 的证明不能代替 Host 原生任务/UI 验收；运行中桌面 App 仍须单独验证。
+
+### 11.2 付费供应商与运行中 App 的前置
+
+本轮检查未找到独立模式的 `MINIMAX_API_KEY`、`GEMINI_API_KEY` 或 `~/.dsivio-video/gateway.json`。宿主配置没有显式 speech/transcribe 协议，语音/云转写池为空。没有取得真实授权的克隆样本与同意文件。实现不能借用 App 聊天/视频 key 推定语音权限，也不能生成授权声明替用户同意。
+
+因此 MiniMax/Gemini 独立付费图像、视频、TTS，宿主 MiniMax/OpenAI TTS、clone 和 whisper-1 云转写的真实产物矩阵仍缺前置；局部协议测试不能把它们标为已实测。
+
+另外，默认 `~/.dsivio-video` 目录存在 group/other 权限，独立云网关返回 `GATEWAY_CONFIG_UNSAFE`，未自动修改用户权限。本机 Google 官方样本域名解析为 `198.18.0.106`，产物下载器在 HTTP 和凭证发送前拒绝非公网/fake-IP 地址；未关闭该边界来制造成功。授权用户凭证、私有目录权限以及真实公网下载可达性均是供应商验收前置；显式本地 ASR 不要求读取云凭证配置。
+
+已有用户 Kivio 进程占用相同单实例标识时，不停止或替换用户进程来取得新版本验收。独立生命周期/CLI harness 与真实桌面 App 验收分开记录；新 App surface 未运行的项目须明示。
+
+### 11.3 审查发现与修复证据
+
+- Host 恢复已有 `Synthesized` 收据的 speech 时，取消状态曾被重置为未提交，可能错误标为“取消且未付费”并丢失后续产物。消费端回归先复现 `Confirmed` 与预期 `Unsupported` 不符；修复从 durable Journal 恢复提交事实并禁止倒退，两个恢复回归通过：已付费产物仍发布，未提交 TTS 仍可取消。
+- Host ASR 取消启动时曾提前释放队列，迟到清理可能碰到下一任务。真实 Python 子进程的调度 harness 在修复前报告 `LEASE_REGRESSION`，修复后确认启动/清理完成前 lease 不释放；清理绑定启动 generation。
+- Host ASR 子进程曾继承无关云凭证；synthetic ambient credential 在修复前被 child 读到，修复后仅显式 OS/PATH/HOME/TEMP/locale/cert-path allowlist 可见。没有使用或输出真实 key。
+- 独立付费提交恢复、并发查询终态、媒体 ResourceRef 发布和跨端参数合并的最终集成证据待记录；未通过的真实供应商验收仍保持前置缺失状态。
+

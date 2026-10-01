@@ -1,8 +1,8 @@
 import { mkdir, open, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { runDsivio } from "../../gateway/dsivio.ts";
-import { dsivioCommand } from "../../tools/dsivio.ts";
+import { gatewayModels, selectBackend } from "../../gateway/backend.ts";
+import { asrOwnerStatus } from "../../asr/backend.ts";
 import { locateTool, toolNames, toolVersion } from "../../tools/index.ts";
 import { DvError } from "../../core/errors.ts";
 import { workerState } from "../../build/observe.ts";
@@ -37,18 +37,14 @@ export async function doctorCommand(options: CliOptions): Promise<number> {
   }
   const modelCounts: Record<string, number> = {};
   try {
-    const command = await dsivioCommand();
-    rows.push({ name: "dsivio-command", status: "ok", message: command });
-    const reply = await runDsivio(["media", "models"], workspace.root, AbortSignal.timeout(10_000));
-    if (reply.code === 6) rows.push({ name: "models", status: "error", message: "Open Dsivio (its CLI returned exit 6)." });
-    else if (reply.code !== 0) rows.push({ name: "models", status: "error", message: `Models query exited ${reply.code}: ${reply.stderr || reply.stdout}` });
-    else {
-      const models: unknown = JSON.parse(reply.stdout);
-      if (!Array.isArray(models) || models.some((model) => typeof model !== "object" || model === null || !("kind" in model) || typeof model.kind !== "string")) throw new Error("Models response must be an array with kind fields.");
-      for (const model of models) modelCounts[model.kind] = (modelCounts[model.kind] ?? 0) + 1;
-      for (const kind of ["image", "video"]) rows.push({ name: `models-${kind}`, status: (modelCounts[kind] ?? 0) > 0 ? "ok" : "warn", message: `${modelCounts[kind] ?? 0} enabled ${kind} models` });
-    }
-  } catch (error) { rows.push({ name: "dsivio", status: "error", message: `Cannot query Dsivio; open Dsivio. ${String(error)}` }); }
+    const ctx = { projectRoot: workspace.root, signal: AbortSignal.timeout(10_000) };
+    const owner = await selectBackend(ctx), models = await gatewayModels(ctx);
+    rows.push({ name: "gateway", status: "ok", message: `Selected owner: ${owner}; no paid request made` });
+    for (const model of models) modelCounts[model.kind] = (modelCounts[model.kind] ?? 0) + 1;
+    for (const kind of ["image", "video", "speech", "transcribe"]) rows.push({ name: `models-${kind}`, status: (modelCounts[kind] ?? 0) > 0 ? "ok" : "warn", message: `${modelCounts[kind] ?? 0} configured ${kind} models (remote account access not probed)` });
+    const asr = await asrOwnerStatus(workspace.root);
+    rows.push({ name: "asr", status: asr.state === "ready" || asr.ready === true ? "ok" : "warn", message: `owner ${String(asr.owner)}; installation ${String(asr.state ?? (asr.ready ? "installed" : "not installed"))}; runtime ${JSON.stringify(asr.runtime ?? null)}` });
+  } catch (error) { rows.push({ name: "gateway", status: "error", message: String(error) }); }
   try {
     const worker = await workerState(workspace);
     rows.push({ name: "worker", status: worker.running ? "ok" : "warn", message: worker.running ? `Worker running (${worker.pid})` : "Worker stopped; builds start it automatically" });

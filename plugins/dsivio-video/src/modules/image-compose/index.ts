@@ -5,7 +5,7 @@ import { DvError } from "../../core/errors.ts";
 import { input } from "../pipeline/index.ts";
 import { composePlanType } from "../../components/image-compose/types.ts";
 import { validateComposePlan } from "../../components/image-compose/validate.ts";
-import { decodeComposeImage } from "../../components/image-compose/author.ts";
+import { authorImage as decodeComposeImage, imageComposeCompanions } from "./studio.ts";
 const imageType = "dsivio-video/media@1#Image";
 function list(inputs: ProducerInputs, name: string): Json[] {
   const values = inputs[name]; if (!Array.isArray(values)) throw new DvError("PRODUCER_INPUT", `Missing list ${name}.`);
@@ -13,6 +13,7 @@ function list(inputs: ProducerInputs, name: string): Json[] {
 }
 const module: ModuleDef = {
   id: "dsivio-video/image-compose@1", summary: "Ordered straight-alpha image composition into a PNG canvas.",
+  studio: imageComposeCompanions,
   types: { Plan: { summary: "Explicit RGBA background and 1..64 layer options.", validate: validateComposePlan } },
   surfaces: {
     Image: { mode: "structured", elaborate: decodeComposeImage, doc: { summary: "Compose existing images; later layers cover earlier layers.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Output identity." }, { name: "canvas", required: true, accepts: "dsivio-video/space@1#Canvas", summary: "Pixel canvas." }, { name: "background", required: false, accepts: "#RRGGBBAA", default: "#00000000", summary: "Straight alpha backdrop." }], children: [{ tag: "Layer", repeat: true, summary: "1..64 ordered image layers." }], outputs: [{ name: "image", type: imageType, summary: "Canvas-sized PNG." }] } },

@@ -9,6 +9,7 @@ import { assembleSoundProgram } from "../../components/sound/program.ts";
 import { lowerSound } from "../../components/sound/lower.ts";
 import { decodeSoundStyle, decodeSoundTrack } from "../../components/sound/author.ts";
 import { validateSoundProgram, validateSoundStyle, validateUsePlan } from "../../components/sound/validate.ts";
+import { soundStudio, soundStyleStudio, elaborateTrack, soundAuthorItems } from "./studio.ts";
 
 export const USE_ATTRIBUTES: AttributeDoc[] = [
   { name: "id", required: false, accepts: "text", summary: "Use identity, otherwise derived from declaration order." },
@@ -23,10 +24,11 @@ export const USE_ATTRIBUTES: AttributeDoc[] = [
 ];
 const sound: ModuleDef = {
   id: "dsivio-video/sound@1", summary: "Ordered presentation rules for existing Timeline sound; one placement-level 48 kHz sample origin preserves phase across Use splits, including fractional FPS. Source and Use precedence mask audibility without resetting playback.",
+  studio: [soundStudio, soundStyleStudio],
   types: { Style: { summary: "Shared linear gain endpoints in 0..64.", validate: validateSoundStyle }, UsePlan: { summary: "Ordered identities and indexes into typed Window/Style input lists.", validate: validateUsePlan }, Program: { summary: "Timeline with ordered resolved Use windows and shared styles.", validate: validateSoundProgram } },
   surfaces: {
     Style: { mode: "structured", doc: { summary: "Empty gain Style. Zero gain still masks earlier Uses.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Shared Style name." }, { name: "gain", required: false, accepts: "number 0..64", default: "1", summary: "Gain at window start." }, { name: "end-gain", required: false, accepts: "number 0..64", default: "gain", summary: "Gain at window end." }], outputs: [{ name: "", type: trackTypes.soundStyle, summary: "Shared Style." }] }, elaborate: decodeSoundStyle },
-    Track: { mode: "structured", doc: { summary: "Projects existing source sound with last-placement/last-Use precedence. Empty Track is silent.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Track identity." }, { name: "timeline", required: true, accepts: timelineTypes.timeline, summary: "Program axis." }], children: [{ tag: "Use", repeat: true, summary: "Ordered presentation rule." }], outputs: [{ name: "program", type: trackTypes.soundProgram, summary: "Inspectable author program." }, { name: "audio", type: renderTypes.audio, summary: "Terminal sound track." }] }, elaborate: decodeSoundTrack },
+    Track: { mode: "structured", doc: { summary: "Projects existing source sound with last-placement/last-Use precedence. Empty Track is silent.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Track identity." }, { name: "timeline", required: true, accepts: timelineTypes.timeline, summary: "Program axis." }], children: [{ tag: "Use", repeat: true, summary: "Ordered presentation rule." }], outputs: [{ name: "program", type: trackTypes.soundProgram, summary: "Inspectable author program." }, { name: "audio", type: renderTypes.audio, summary: "Terminal sound track." }] }, elaborate(node, ctx) { elaborateTrack(node, ctx, decodeSoundTrack, soundAuthorItems); } },
     Use: { mode: "structured", doc: { summary: "Track-only shared Style/window rule; full W with default program.", attributes: USE_ATTRIBUTES, outputs: [] }, elaborate(node, ctx) { ctx.fail("TRACK_CHILD", "Use is only valid inside sound:Track.", node.span); } },
   },
   producers: {

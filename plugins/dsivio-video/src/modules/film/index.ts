@@ -11,6 +11,7 @@ import { renderTypes } from "../../render/ir.ts";
 import { composeComposition, filmBackground, validateComposition } from "../../render/composition.ts";
 import { RECIPE, validateRecipe } from "../recipe/index.ts";
 import { text as identity } from "../../render/validate.ts";
+import { filmStudio } from "./studio.ts";
 
 function structured(node: ElementNode | RawElement, ctx: ElaborationContext, allowed: readonly string[]): { element: ElementNode; attrs: Record<string, Attribute> } {
   if (node.kind !== "element") ctx.fail("FILM_CHILD", "Film requires structured markup.", node.span);
@@ -38,6 +39,7 @@ function empty(element: ElementNode, ctx: ElaborationContext): void {
 }
 const film: ModuleDef = {
   id: "dsivio-video/film@1", summary: "Explicit terminal track assembly, canonical ordering, background and cross-track layer conflict checks; no rendering or implicit audio.",
+  studio: [filmStudio],
   types: { Composition: { summary: "One exact program domain and canvas with explicit visual/audio tracks and background.", validate: validateComposition } },
   surfaces: {
     Film: { mode: "structured", doc: { summary: "Assembles explicit tracks from one Timeline. Appearance is exactly background; layers come from Presents, not Film child order.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Composition identity." }, { name: "canvas", required: true, accepts: spaceTypes.canvas, summary: "Canvas geometry." }, { name: "timeline", required: true, accepts: timelineTypes.timeline, summary: "Exact program domain." }, { name: "appearance", required: true, accepts: RECIPE, summary: "Static Recipe with only background: #RRGGBB or #RRGGBBAA." }], children: [{ tag: "Track", repeat: true, summary: "Explicit audio or visual terminal source; at least one." }], outputs: [{ name: "composition", type: renderTypes.composition, summary: "Terminal Composition; not video bytes." }] }, elaborate(node, ctx) {
@@ -55,13 +57,15 @@ const film: ModuleDef = {
         if (child.kind !== "element" || child.tag !== `${prefix}Track`) return ctx.fail("FILM_CHILD", "Film accepts only Track children from its own namespace.", child.span);
         const { attrs: childAttrs } = structured(child, ctx, ["source"]); empty(child, ctx);
         const source = reference(childAttrs, "source", [renderTypes.visual, renderTypes.audio], child, ctx);
+        ctx.authoring({ binding: source, element: child, role: "input", attribute: "source" });
         if (sources.has(source.key)) ctx.fail("FILM_DUPLICATE_SOURCE", "A Film cannot include the same source twice.", child.span);
         sources.add(source.key);
         if (source.type === renderTypes.visual) visualTracks.push(source); else audioTracks.push(source);
       }
       if (!sources.size) ctx.fail("FILM_TRACKS", "Film requires at least one explicit Track.", element.span);
       const key = ctx.record(null, { type: timelineTypes.consumerKey, data: entityIdentity(ctx.file, id) }, element.span);
-      ctx.operation({ producer: "dsivio-video/film@1#compose", inputs: { canvas, timeline, appearance, key, visualTracks, audioTracks }, publish: { composition: `${id}.composition` }, label: id, span: element.span });
+      const result = ctx.operation({ producer: "dsivio-video/film@1#compose", inputs: { canvas, timeline, appearance, key, visualTracks, audioTracks }, publish: { composition: `${id}.composition` }, label: id, span: element.span });
+      ctx.authoring({ binding: result.composition!, element, role: "output", identity: entityIdentity(ctx.file, id) });
     } },
     Track: { mode: "structured", doc: { summary: "Film-only explicit terminal track source; no implicit sibling audio.", attributes: [{ name: "source", required: true, accepts: `${renderTypes.visual} or ${renderTypes.audio}`, summary: "Unique terminal track source." }], outputs: [] }, elaborate(node, ctx) { ctx.fail("FILM_CHILD", "Track is only valid inside film:Film.", node.span); } },
   },

@@ -2,7 +2,7 @@
 
 import type { SourceSpan } from "./errors.ts";
 import type { NeedRequest } from "./module.ts";
-import type { ResourceRef, TypeRef, Value } from "./value.ts";
+import type { Json, ResourceRef, TypeRef, Value } from "./value.ts";
 
 /** Where an operation input comes from. */
 export type InputSource = { record: string } | { operation: string; port: string };
@@ -102,6 +102,9 @@ export interface ExecutionDefinition {
   /** Every reachable public output -> record key holding its value. */
   outputs: Record<string, { record: string; type: TypeRef }>;
   modules: string[];
+  gatewayBackend?: "dsivio" | "standalone";
+  /** Planned gateway snapshots keyed by fulfil command. Pending values are replaced by real producer inputs, not replanned. */
+  gatewaySnapshots?: Record<string, Json>;
 }
 
 // ---------- Build machine commands and facts ----------

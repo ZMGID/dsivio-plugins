@@ -1,4 +1,4 @@
-import { installAsr, asrStatus } from "../../asr/install.ts";
+import { installOwnedAsr, asrOwnerStatus } from "../../asr/backend.ts";
 import { installRaster, rasterStatus, rasterPython } from "../../raster/install.ts";
 import { DvError } from "../../core/errors.ts";
 import { locateTool, toolNames, toolVersion } from "../../tools/index.ts";
@@ -31,8 +31,8 @@ export async function setupCommand(options: CliOptions): Promise<number> {
   }
   if (action === "asr") {
     const model = typeof options.values.model === "string" ? options.values.model : undefined;
-    const status = await installAsr({ ...(model ? { model } : {}), onProgress: (line) => process.stderr.write(`${line}\n`) });
-    result(options, { schema: "dsivio-video.setup/1", asr: status }, [`ASR ready: ${status.path}`, `Model: ${status.model}`, `Languages: ${status.languages?.join(", ") ?? "none"}`]);
+    const status = await installOwnedAsr(openWorkspace(options).root, model);
+    result(options, { schema: "dsivio-video.setup/1", asr: status }, [`ASR owner: ${String(status.owner)}`, `Install state: ${String(status.state ?? (status.ready ? "installed" : "not installed"))}`, "Query setup status for actual installation/runtime readiness."]);
     return 0;
   }
   if (action === "raster") {
@@ -51,7 +51,7 @@ export async function setupCommand(options: CliOptions): Promise<number> {
       tools.push({ name, path: null, source: null, error: error.message, ...(error.hint ? { hint: error.hint } : {}) });
     }
   }
-  const asr = await asrStatus();
+  const asr = await asrOwnerStatus(workspace.root);
   let raster;
   try { raster = { ...await rasterStatus(), state: "ready" }; }
   catch (error) {
@@ -60,8 +60,8 @@ export async function setupCommand(options: CliOptions): Promise<number> {
   }
   result(options, { schema: "dsivio-video.setup-status/1", tools, asr, raster }, [
     ...tools.map((tool) => `${tool.name}: ${tool.path !== null ? `${tool.version}; ${tool.path} (source: ${tool.source})` : `${tool.error}${tool.hint ? `; ${tool.hint}` : ""}`}`),
-    `ASR: ${asr.ready ? "ready" : "not prepared"}; ${asr.path}${asr.model ? `; model: ${asr.model}` : ""}`,
-    ...(asr.ready ? [] : ["Run dsivio-video setup asr to prepare local transcription."]),
+    `ASR owner: ${String(asr.owner)}; installation: ${String(asr.state ?? (asr.ready ? "installed" : "not installed"))}; runtime: ${JSON.stringify(asr.runtime ?? null)}`,
+    ...(!asr.ready && asr.state !== "ready" ? ["Run dsivio-video setup asr to prepare transcription with the selected owner."] : []),
     `Raster: ${raster.state}; ${raster.path}${"opencv" in raster ? `; OpenCV ${raster.opencv}; NumPy ${raster.numpy}` : `; ${raster.error}`}`,
     ...(raster.ready ? [] : ["Run dsivio-video setup raster to prepare local image processing."]),
   ]);

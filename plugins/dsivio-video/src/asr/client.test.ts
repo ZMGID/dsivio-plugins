@@ -4,7 +4,7 @@ import type { ServerResponse } from "node:http";
 import { test } from "node:test";
 import { DvError } from "../core/errors.ts";
 import { ASR_PROTOCOL, ASR_SERVICE_VERSION, WHISPERX_VERSION } from "./install.ts";
-import { healthAsr, transcribeAsr } from "./client.ts";
+import { healthAsr, parseAsrReply, transcribeAsr } from "./client.ts";
 
 const config = { model: "small", device: "cpu", compute: "int8", batchSize: 8 };
 const health = { ok: true, protocol: ASR_PROTOCOL, serviceVersion: ASR_SERVICE_VERSION, whisperxVersion: WHISPERX_VERSION, ...config };
@@ -87,4 +87,46 @@ test("caller cancellation interrupts inference without becoming a timeout", asyn
     if (path === "/health") response.end(JSON.stringify(health));
     else controller.abort();
   });
+});
+
+// Matches Host decode_openai's transcript and preserves its unaligned final word.
+const cloudTranscript = {
+  schema: "dsivio.media.transcript/1",
+  language: "en",
+  sampleRate: 16000,
+  sampleFrames: 32000,
+  engine: { backend: "cloud", model: "whisper-1", protocol: "openai.audio.transcriptions/1" },
+  segments: [{ text: "hello world", start: 0, end: 2, words: [{ text: "hello", start: 0, end: 1 }, { text: "world" }] }],
+};
+
+test("Host cloud transcript needs common engine identity, not local WhisperX versions", () => {
+  const reply = parseAsrReply(cloudTranscript);
+  assert.deepEqual(reply.segments[0]?.words, [{ text: "hello", start: 0, end: 1 }, { text: "world" }]);
+  assert.equal(reply.engine?.protocol, "openai.audio.transcriptions/1");
+  assert.equal(reply.engine?.serviceVersion, undefined);
+  assert.equal(reply.engine?.whisperxVersion, undefined);
+});
+
+test("transcript engine identity remains required and local WhisperX requires both versions", () => {
+  const invalidEngine = (engine: unknown): void => {
+    assert.throws(() => parseAsrReply({ ...cloudTranscript, engine }), (error: unknown) => error instanceof DvError && error.code === "ASR_RESPONSE_INVALID");
+  };
+  for (const field of ["backend", "model", "protocol"] as const) {
+    const engine: Record<string, unknown> = { ...cloudTranscript.engine };
+    delete engine[field];
+    invalidEngine(engine);
+  }
+  const local = { backend: "local", model: "small", protocol: ASR_PROTOCOL, serviceVersion: ASR_SERVICE_VERSION, whisperxVersion: WHISPERX_VERSION };
+  for (const field of ["serviceVersion", "whisperxVersion"] as const) {
+    const engine: Record<string, unknown> = { ...local };
+    delete engine[field];
+    invalidEngine(engine);
+  }
+  invalidEngine({ ...cloudTranscript.engine, serviceVersion: 1 });
+});
+
+test("cloud transcripts retain strict schema and standard sample evidence bounds", () => {
+  for (const change of [{ schema: "unknown" }, { sampleRate: 8000 }, { sampleFrames: 0 }, { sampleFrames: 0.5 }, { sampleFrames: Number.MAX_SAFE_INTEGER + 1 }]) {
+    assert.throws(() => parseAsrReply({ ...cloudTranscript, ...change }), (error: unknown) => error instanceof DvError && error.code === "ASR_RESPONSE_INVALID");
+  }
 });

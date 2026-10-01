@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { copyFile, cp, link, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { HistoryReader, HistoricalOutput } from "../core/history.ts";
@@ -9,8 +9,11 @@ import { isResourceRef, valueClass } from "../core/value.ts";
 import { DvError } from "../core/errors.ts";
 import { validateBuildId } from "./ids.ts";
 import { ProjectStore } from "./resources.ts";
+import { BuildStore } from "./store.ts";
 
-export type ResultOutput = { type: TypeRef; class: ValueClass; value: Json } | { forward: { build: string; output: string } };
+const renameQueues = new Map<string, Promise<void>>();
+
+export type ResultOutput = ({ type: TypeRef; class: ValueClass; value: Json } | { forward: { build: string; output: string } }) & { displayName?: string };
 export interface OperationEvidence {
   outputs: string[];
   backend: string | null;
@@ -35,7 +38,7 @@ export interface ResultManifest {
   outputs: Record<string, ResultOutput>;
   operations: OperationEvidence[];
 }
-export interface ListOptions { limit?: number; before?: string }
+export interface ListOptions { limit?: number; before?: string; includeOpen?: boolean }
 
 export function operationEvidence(definition: ExecutionDefinition, operation: Operation): OperationEvidence {
   let record: string | undefined;
@@ -78,6 +81,50 @@ export class ResultsRepository implements HistoryReader {
     }
   }
 
+  async readVersioned(id: string): Promise<{ manifest: ResultManifest; manifestVersion: string } | undefined> {
+    try {
+      const text = await readFile(this.pathOf(id), "utf8");
+      const manifest = { ...JSON.parse(text), id } as ResultManifest;
+      return { manifest, manifestVersion: createHash("sha256").update(text).digest("hex") };
+    } catch (error) {
+      if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined;
+      throw new DvError("RESULT_READ", `Cannot read result ${id}`, { cause: error });
+    }
+  }
+
+  async renameOutput(id: string, output: string, expectedManifestVersion: string, displayName: string): Promise<{ manifest: ResultManifest; manifestVersion: string }> {
+    if (typeof output !== "string" || !output || typeof expectedManifestVersion !== "string" || !expectedManifestVersion || typeof displayName !== "string" || !displayName.trim()) throw new DvError("RESULT_RENAME_INVALID", "Output, manifest version and a non-empty display name are required.");
+    const path = this.pathOf(id);
+    const prior = renameQueues.get(path) ?? Promise.resolve();
+    const operation = prior.then(async () => {
+      const store = new BuildStore(this.stateDir);
+      let temp: string | undefined;
+      try {
+        const original = await readFile(path, "utf8");
+        if (createHash("sha256").update(original).digest("hex") !== expectedManifestVersion) throw new DvError("RESULT_RENAME_CONFLICT", "Result changed. Refresh the artifact before renaming.");
+        const document = JSON.parse(original) as Omit<ResultManifest, "id">;
+        if (!["complete", "failed", "cancelled"].includes(document.outcome) || (store.read(id) && store.read(id)?.state !== "done")) throw new DvError("RESULT_RENAME_CONFLICT", "Result is still open or being saved by the worker.");
+        if (!document.outputs || !Object.hasOwn(document.outputs, output)) throw new DvError("OUTPUT_MISSING", `Output ${output} is not available in ${id}`);
+        const target = document.outputs[output]!;
+        if (target === null || typeof target !== "object") throw new DvError("RESULT_RENAME_INVALID", `Invalid Output ${output} in ${id}`);
+        target.displayName = displayName.trim();
+        const text = JSON.stringify(document, null, 2) + "\n";
+        temp = `${path}.${randomBytes(8).toString("hex")}.tmp`;
+        await writeFile(temp, text, { flag: "wx" });
+        if (await readFile(path, "utf8") !== original || (store.read(id) && store.read(id)?.state !== "done")) throw new DvError("RESULT_RENAME_CONFLICT", "Result changed while saving the display name.");
+        await rename(temp, path);
+        return { manifest: { ...document, id }, manifestVersion: createHash("sha256").update(text).digest("hex") };
+      } catch (error) {
+        if (temp) await rm(temp, { force: true });
+        if (error instanceof DvError) throw error;
+        throw new DvError("RESULT_RENAME", `Cannot rename ${id}:${output}`, { cause: error });
+      } finally { store.close(); }
+    });
+    const settled = operation.then(() => undefined, () => undefined);
+    renameQueues.set(path, settled);
+    try { return await operation; } finally { if (renameQueues.get(path) === settled) renameQueues.delete(path); }
+  }
+
   async list(options: ListOptions = {}): Promise<ResultManifest[]> {
     const root = join(this.stateDir, "results");
     let dates: string[];
@@ -96,7 +143,7 @@ export class ResultsRepository implements HistoryReader {
     const rows: ResultManifest[] = [];
     for (const id of ids) {
       const result = await this.read(id);
-      if (result && result.outcome !== "open") rows.push(result);
+      if (result && (options.includeOpen || result.outcome !== "open")) rows.push(result);
       if (rows.length >= (options.limit ?? 20)) break;
     }
     return rows;

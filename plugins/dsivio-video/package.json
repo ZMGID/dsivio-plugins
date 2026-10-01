@@ -13,12 +13,15 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --test --disable-warning=ExperimentalWarning \"src/**/*.test.ts\" \"test/**/*.test.ts\""
+    "typecheck:studio": "tsc -p tsconfig.studio.json",
+    "test": "node --test --disable-warning=ExperimentalWarning \"src/**/*.test.ts\" \"src/**/*.test.js\" \"test/**/*.test.ts\""
   },
   "dependencies": {
     "@hyperframes/engine": "0.8.99",
     "@hyperframes/producer": "0.8.99",
     "@puppeteer/browsers": "3.2.3",
+    "preact": "10.27.2",
+    "htm": "3.1.1",
     "puppeteer-core": "25.8.0",
     "sharp": "^0.34.5"
   },
@@ -32,6 +35,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
-    "typescript": "^5.9.0"
+    "typescript": "5.9.3"
   }
 }

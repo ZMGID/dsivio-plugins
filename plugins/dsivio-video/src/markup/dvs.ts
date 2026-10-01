@@ -3,6 +3,47 @@ import type { Json } from "../core/value.ts";
 import type { DvsRule, DvsSheet } from "./ast.ts";
 import { readHeader } from "./header.ts";
 
+/** Complete DVS syntax; collections are strict JSON, scalar strings keep raw escapes. */
+export function serializeDvsValue(value: Json): string {
+  if (typeof value === "string") {
+    for (const quote of ['"', "'"]) {
+      let safe = true;
+      for (let index = 0; index < value.length; index++) {
+        if (value[index] === "\\") {
+          if (++index === value.length) safe = false;
+        } else if (value[index] === quote) safe = false;
+      }
+      if (safe) return quote + value + quote;
+    }
+    throw new DvError("DVS_VALUE_STRING", "This scalar string cannot be represented without changing its raw escapes.");
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new DvError("DVS_VALUE_NUMBER", "DVS numbers must be finite.");
+    if (Object.is(value, -0)) return "-0";
+    const text = String(value);
+    if (!/[eE]/.test(text)) return text;
+    // The existing scalar grammar has no exponent notation.
+    const [mantissa, exponent] = text.split(/[eE]/);
+    const negative = mantissa!.startsWith("-");
+    const unsigned = negative ? mantissa!.slice(1) : mantissa!;
+    const digits = unsigned.replace(".", "");
+    const point = (unsigned.includes(".") ? unsigned.indexOf(".") : unsigned.length) + Number(exponent);
+    const decimal = point <= 0 ? "0." + "0".repeat(-point) + digits
+      : point >= digits.length ? digits + "0".repeat(point - digits.length)
+      : digits.slice(0, point) + "." + digits.slice(point);
+    return (negative ? "-" : "") + decimal;
+  }
+  try {
+    return JSON.stringify(value, (_key, child: unknown) => {
+      if (typeof child === "number" && !Number.isFinite(child)) throw new DvError("DVS_VALUE_NUMBER", "DVS numbers must be finite.");
+      return child;
+    });
+  } catch (error) {
+    if (error instanceof DvError) throw error;
+    throw new DvError("DVS_VALUE_STRUCTURED", "The value must be serializable JSON.", { cause: error });
+  }
+}
+
 class SheetParser {
   readonly file: string;
   readonly text: string;
@@ -28,8 +69,9 @@ class SheetParser {
     }
   }
 
-  value(): Json {
+  value(): { value: Json; start: number; end: number; separatorStart: number } {
     const start = this.cursor;
+    let valueEnd = start;
     let raw = "";
     let quote = "";
     let depth = 0;
@@ -42,6 +84,7 @@ class SheetParser {
           raw += this.text[this.cursor]!;
           this.cursor++;
         } else if (character === quote) quote = "";
+        valueEnd = this.cursor;
         continue;
       }
       if (this.text.startsWith("/*", this.cursor)) {
@@ -60,6 +103,7 @@ class SheetParser {
       } else if (character === ";" && depth === 0) break;
       if (this.text.startsWith("</sheet", this.cursor)) break;
       raw += character;
+      if (depth > 0 || !/\s/.test(character)) valueEnd = this.cursor + 1;
       this.cursor++;
     }
     raw = raw.trim();
@@ -77,8 +121,9 @@ class SheetParser {
     } else if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) value = raw.slice(1, -1);
     else value = raw;
     if (this.text[this.cursor] !== ";") this.fail("DVS_PROPERTY_SEMICOLON", "A property must end with a semicolon.");
+    const separatorStart = this.cursor;
     this.cursor++;
-    return value;
+    return { value, start, end: valueEnd, separatorStart };
   }
 }
 
@@ -135,16 +180,20 @@ export function parseDvs(file: string, text: string): DvsSheet {
     const name = /^[^\s{};<>]+/.exec(text.slice(parser.cursor));
     if (!name || !/^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)+$/.test(name[0])) parser.fail("DVS_RULE", "A rule name must contain lowercase dotted segments.");
     parser.cursor += name[0].length;
+    const nameSpan = spanAt(file, text, start, parser.cursor);
     if (ruleNames.has(name[0])) parser.fail("DVS_RULE_DUPLICATE", `Rule ${name[0]} is repeated.`, start);
     ruleNames.add(name[0]);
     parser.trivia();
     if (text[parser.cursor] !== "{") parser.fail("DVS_RULE_OPEN", "Expected { after the rule name.");
+    const bodyStart = parser.cursor;
     parser.cursor++;
     const properties: DvsRule["properties"] = [];
     const propertyNames = new Set<string>();
+    let closingStart = parser.cursor;
     for (;;) {
       parser.trivia();
       if (text[parser.cursor] === "}") {
+        closingStart = parser.cursor;
         parser.cursor++;
         break;
       }
@@ -159,12 +208,27 @@ export function parseDvs(file: string, text: string): DvsSheet {
       if (text[parser.cursor] !== ":") parser.fail("DVS_PROPERTY_COLON", "Expected : after the property name.");
       parser.cursor++;
       parser.trivia();
-      const value = parser.value();
-      properties.push({ name: property[0], value, span: spanAt(file, text, propertyStart, parser.cursor) });
+      const parsed = parser.value();
+      const span = spanAt(file, text, propertyStart, parser.cursor);
+      properties.push({
+        name: property[0], value: parsed.value, span,
+        nameSpan: spanAt(file, text, propertyStart, propertyStart + property[0].length),
+        valueSpan: spanAt(file, text, parsed.start, parsed.end),
+        fullSpan: span, deleteSpan: span,
+        separatorSpan: spanAt(file, text, parsed.separatorStart, parser.cursor),
+        raw: text.slice(propertyStart, parser.cursor),
+        valueRaw: text.slice(parsed.start, parsed.end),
+      });
     }
-    rules.push({ name: name[0], properties, span: spanAt(file, text, start, parser.cursor) });
+    rules.push({
+      name: name[0], properties, span: spanAt(file, text, start, parser.cursor), nameSpan,
+      bodySpan: spanAt(file, text, bodyStart, parser.cursor),
+      openingBrace: spanAt(file, text, bodyStart, bodyStart + 1),
+      closingBrace: spanAt(file, text, closingStart, parser.cursor),
+      insertion: spanAt(file, text, closingStart, closingStart),
+    });
   }
   parser.trivia();
   if (parser.cursor !== text.length) parser.fail("DVS_TRAILING", "Only whitespace and comments may follow the sheet.");
-  return { file, using: header.using, ...(id === undefined ? {} : { id }), rules };
+  return { file, source: text, using: header.using, ...(id === undefined ? {} : { id }), rules };
 }

@@ -9,9 +9,20 @@ const WORD = /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\d+(?:[,.]\
 export function normalizeMatchText(source: string): string {
   return source.normalize("NFKC").toLocaleLowerCase("en").replace(/[^\p{L}\p{M}\p{N}]/gu, "");
 }
-type Marker = { name: string; close: boolean; left: boolean; moment: boolean; position: number; offset: number };
+type Marker = { name: string; close: boolean; left: boolean; moment: boolean; position: number; offset: number; end: number };
 type BoundMarker = Marker & { anchor: string; tokenBoundary: number };
-export type ScriptResult = { narrative: Narrative; segments: Record<string, SegmentRef>; speech: string; dialogue: string; segmentTexts: Record<string, { speech: string; dialogue: string }> };
+export type ScriptSlice = { start: number; end: number; text: string };
+export type ScriptMarker = ScriptSlice & { name: string; edge: "start" | "end" | "cue"; anchorKey: string; tokenBoundary: number; affinity: "left" | "right" };
+export type ScriptGap = { offset: number; anchorKey: string; tokenBoundary: number; affinity: "left" | "right" };
+export type ScriptSourceMap = {
+  body: string; bodyStart: number;
+  segments: { segmentKey: string; name: string; slice: ScriptSlice }[];
+  tokens: { tokenKey: string; slices: ScriptSlice[] }[];
+  markers: ScriptMarker[];
+  gaps: ScriptGap[];
+};
+export type ScriptPatch = { start: number; end: number; expectedText: string; text: string };
+export type ScriptResult = { narrative: Narrative; segments: Record<string, SegmentRef>; speech: string; dialogue: string; segmentTexts: Record<string, { speech: string; dialogue: string }>; sourceMap: ScriptSourceMap };
 
 export function parseScript(body: string, id: string, file = "<script>", bodyStart = 0, bodySpan?: SourceSpan): ScriptResult {
   const fail: (code: string, message: string, offset?: number) => never = (code, message, offset = cursor) => {
@@ -23,14 +34,28 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
   const narrative: Narrative = { storyKey: "pending", segments: [], turns: [], tokens: [], anchors: [], storyAnchors: { start: "story:start", end: "story:end" }, selections: [], moments: [], captions: { storyKey: "pending", units: [], cues: [] } };
   const segments: Record<string, SegmentRef> = Object.create(null); const boundMarkers: BoundMarker[] = []; const outerMarkers: { marker: Marker; boundary: number; segmentBoundary: number }[] = [];
   const pronunciation = new Map<Turn, string>();
+  const sourceMap: ScriptSourceMap = { body, bodyStart, segments: [], tokens: [], markers: [], gaps: [] };
+  const slice = (start: number, end: number): ScriptSlice => ({ start: bodyStart + start, end: bodyStart + end, text: body.slice(start, end) });
+  let pendingOffsets: number[] = []; let segmentStart = 0;
   let pending = ""; let markers: Marker[] = []; let cue: CaptionCue | undefined; let cueBreak = false; let lastAttributed = false;
   const pair = (key: string): AnchorPair => ({ start: `${key}:anchor:start`, end: `${key}:anchor:end` });
   const beginTurn = (role?: string) => { if (!segment) fail("SCRIPT_ROLE", "Role must occur within a segment"); turn = { turnKey: `turn:${narrative.turns.length}`, segmentKey: segment.segmentKey, tokenBounds: { start: narrative.tokens.length, end: narrative.tokens.length }, ...(role !== undefined ? { role } : {}) }; narrative.turns.push(turn); cue = undefined; };
-  const addTokens = (source: string): { matches: RegExpMatchArray[]; start: number } => {
+  const addTokens = (source: string, offsets: number[]): { matches: RegExpMatchArray[]; start: number } => {
     if (!segment) fail("SCRIPT_BODY", "Speech must occur within a segment");
     const start = narrative.tokens.length; const matches = [...source.matchAll(WORD)];
     if (matches.length && !turn) beginTurn();
-    for (const match of matches) { const key = `token:${narrative.tokens.length}`; narrative.tokens.push({ tokenKey: key, segmentKey: segment.segmentKey, turnKey: turn!.turnKey, speechText: match[0], matchText: normalizeMatchText(match[0]), anchors: pair(key) }); }
+    for (const match of matches) {
+      const key = `token:${narrative.tokens.length}`;
+      narrative.tokens.push({ tokenKey: key, segmentKey: segment.segmentKey, turnKey: turn!.turnKey, speechText: match[0], matchText: normalizeMatchText(match[0]), anchors: pair(key) });
+      const positions = offsets.slice(match.index!, match.index! + match[0].length);
+      const slices: ScriptSlice[] = [];
+      for (const offset of positions) {
+        const last = slices.at(-1);
+        if (last && last.end === bodyStart + offset) { last.end++; last.text = body.slice(last.start - bodyStart, last.end - bodyStart); }
+        else slices.push(slice(offset, offset + 1));
+      }
+      sourceMap.tokens.push({ tokenKey: key, slices });
+    }
     if (turn) turn.tokenBounds.end = narrative.tokens.length;
     segment.tokenBounds.end = narrative.tokens.length; return { matches, start };
   };
@@ -57,7 +82,7 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
     if (!segment) { if (pending.trim()) fail("SCRIPT_BODY", "Script outer body accepts only segments and markers"); pending = ""; return; }
     const source = pending.replace(/\s+/gu, " ");
     // Marker offsets refer to the uncollapsed string, so tokenize it before whitespace normalization.
-    const result = addTokens(pending); bind(pending, markers, result.matches, result.start);
+    const result = addTokens(pending, pendingOffsets); bind(pending, markers, result.matches, result.start);
     if (turn) pronunciation.set(turn, (pronunciation.get(turn) ?? "") + source);
     if (result.matches.length) {
       for (let i = 0; i < result.matches.length; i++) {
@@ -81,35 +106,35 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
     } else if (source.trim()) {
       const unit = narrative.captions.units.at(-1); if (!unit || unit.tokenBounds.end !== narrative.tokens.length || cueBreak) fail("SCRIPT_WORD", "Punctuation requires a spoken word"); unit.text += source.trim();
     }
-    pending = ""; markers = [];
+    pending = ""; pendingOffsets = []; markers = [];
   };
   const readMarker = (): Marker => {
     const offset = cursor; const end = body.indexOf("}", cursor + 2); if (end === -1) fail("SCRIPT_MARKER", "Unclosed semantic marker"); const content = body.slice(cursor + 2, end); const match = /^(\/)?(~)?([a-z][a-z0-9_-]{0,63})([!~])?$/.exec(content);
     if (!match || match[1] && match[4] === "!" || match[2] && match[1] || match[4] === "~" && !match[1]) fail("SCRIPT_MARKER", "Invalid semantic marker"); cursor = end + 1;
-    return { name: match[3]!, close: !!match[1], left: match[1] ? match[4] !== "~" : !!match[2], moment: match[4] === "!", position: pending.length, offset };
+    return { name: match[3]!, close: !!match[1], left: match[1] ? match[4] !== "~" : !!match[2], moment: match[4] === "!", position: pending.length, offset, end: cursor };
   };
   const attrs = (source: string): CaptionUnit["attributes"] => {
     const result: CaptionUnit["attributes"] = Object.create(null);
     for (const entry of source.split(",")) { const match = /^([a-z][a-z0-9_-]*)(?:=([^\s{},]+))?$/.exec(entry); if (!match || Object.hasOwn(result, match[1]!)) fail("SCRIPT_ATTRIBUTE", "Invalid or duplicate display attribute"); const value = match[2]; if (value === undefined || value === "true") result[match[1]!] = true; else if (value === "false") result[match[1]!] = false; else if (/^-?\d+(?:\.\d+)?$/.test(value)) { const number = Number(value); if (!Number.isFinite(number)) fail("SCRIPT_ATTRIBUTE", "Display numbers must be finite"); result[match[1]!] = number; } else result[match[1]!] = value; }
     return result;
   };
-  const decodeDual = (source: string, speechSide: boolean, shared = false): { text: string; markers: Marker[]; attributes: CaptionUnit["attributes"] } => {
-    let text = ""; const entries: Marker[] = []; const attributes: CaptionUnit["attributes"] = Object.create(null);
+  const decodeDual = (source: string, base: number, speechSide: boolean, shared = false): { text: string; offsets: number[]; markers: Marker[]; attributes: CaptionUnit["attributes"] } => {
+    let text = ""; const offsets: number[] = []; const entries: Marker[] = []; const attributes: CaptionUnit["attributes"] = Object.create(null);
     for (let i = 0; i < source.length;) {
       const ch = source[i]!;
       if (source.startsWith("<!--", i)) { const end = source.indexOf("-->", i + 4); if (end < 0) fail("SCRIPT_COMMENT", "Unclosed Script comment"); i = end + 3; continue; }
-      if (ch === "\\") { const next = source[i + 1]; if (!next || !"@<\\|{}>".includes(next)) fail("SCRIPT_ESCAPE", "Unknown Script escape"); text += next; i += 2; }
-      else if (source.startsWith("@{", i)) { if (!speechSide && !shared) fail("SCRIPT_DUAL_MARKER", "Explicit Dual Text markers belong on the speech side"); const end = source.indexOf("}", i + 2); if (end < 0) fail("SCRIPT_MARKER", "Unclosed marker"); const content = source.slice(i + 2, end); const match = /^(\/)?(~)?([a-z][a-z0-9_-]{0,63})([!~])?$/.exec(content); if (!match || match[1] && match[4] === "!" || match[2] && match[1] || match[4] === "~" && !match[1]) fail("SCRIPT_MARKER", "Invalid semantic marker"); entries.push({ name: match[3]!, close: !!match[1], left: match[1] ? match[4] !== "~" : !!match[2], moment: match[4] === "!", position: text.length, offset: cursor + i }); i = end + 1; }
+      if (ch === "\\") { const next = source[i + 1]; if (!next || !"@<\\|{}>".includes(next)) fail("SCRIPT_ESCAPE", "Unknown Script escape"); offsets.push(base + i + 1); text += next; i += 2; }
+      else if (source.startsWith("@{", i)) { if (!speechSide && !shared) fail("SCRIPT_DUAL_MARKER", "Explicit Dual Text markers belong on the speech side"); const end = source.indexOf("}", i + 2); if (end < 0) fail("SCRIPT_MARKER", "Unclosed marker"); const content = source.slice(i + 2, end); const match = /^(\/)?(~)?([a-z][a-z0-9_-]{0,63})([!~])?$/.exec(content); if (!match || match[1] && match[4] === "!" || match[2] && match[1] || match[4] === "~" && !match[1]) fail("SCRIPT_MARKER", "Invalid semantic marker"); entries.push({ name: match[3]!, close: !!match[1], left: match[1] ? match[4] !== "~" : !!match[2], moment: match[4] === "!", position: text.length, offset: base + i, end: base + end + 1 }); i = end + 1; }
       else if (ch === "{") { if (speechSide && !shared) fail("SCRIPT_DUAL_ATTRIBUTE", "Explicit Dual Text attributes belong on the display side"); const end = source.indexOf("}", i + 1); if (end < 0 || !text || /\s$/.test(text)) fail("SCRIPT_ATTRIBUTE", "Display attributes must follow a display word"); const parsed = attrs(source.slice(i + 1, end)); for (const [key, value] of Object.entries(parsed)) { if (Object.hasOwn(attributes, key)) fail("SCRIPT_ATTRIBUTE", "Duplicate Dual Text attribute"); attributes[key] = value; } i = end + 1; }
-      else { if (ch === "<" || source.startsWith("||", i) || ch === "@" || ch === "}") fail("SCRIPT_DUAL", "Invalid nested or unescaped Dual Text syntax"); text += ch; i++; }
+      else { if (ch === "<" || source.startsWith("||", i) || ch === "@" || ch === "}") fail("SCRIPT_DUAL", "Invalid nested or unescaped Dual Text syntax"); offsets.push(base + i); text += ch; i++; }
     }
-    return { text, markers: entries, attributes };
+    return { text, offsets, markers: entries, attributes };
   };
   while (cursor < body.length) {
     if (body.startsWith("<!--", cursor)) { const end = body.indexOf("-->", cursor + 4); if (end < 0) fail("SCRIPT_COMMENT", "Unclosed Script comment"); cursor = end + 3; continue; }
     if (body.startsWith("@{", cursor)) { const m = readMarker(); if (segment) markers.push(m); else { if (pending.trim()) fail("SCRIPT_BODY", "Unexpected outer text"); outerMarkers.push({ marker: m, boundary: narrative.tokens.length, segmentBoundary: narrative.segments.length }); } continue; }
     const ch = body[cursor]!;
-    if (ch === "\\") { const next = body[cursor + 1]; if (!next || !"@<\\|{}".includes(next)) fail("SCRIPT_ESCAPE", "Unknown Script escape"); pending += next; cursor += 2; continue; }
+    if (ch === "\\") { const next = body[cursor + 1]; if (!next || !"@<\\|{}".includes(next)) fail("SCRIPT_ESCAPE", "Unknown Script escape"); pendingOffsets.push(cursor + 1); pending += next; cursor += 2; continue; }
     if (ch === "<") {
       let end = cursor + 1; let escaped = false;
       for (; end < body.length; end++) {
@@ -121,13 +146,14 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
       if (!segment) {
         if (pending.trim()) fail("SCRIPT_BODY", "Unexpected outer text"); const self = content.endsWith("/"); const name = self ? content.slice(0, -1) : content;
         if (!NAME.test(name) || name === "script") fail("SCRIPT_SEGMENT_ID", "Invalid Segment name"); if (Object.hasOwn(segments, name)) fail("SCRIPT_SEGMENT_DUPLICATE", `Duplicate Segment '${name}'`);
-        segmentName = name; segment = { kind: "segment", storyKey: "pending", segmentKey: `segment:${name}`, tokenBounds: { start: narrative.tokens.length, end: narrative.tokens.length }, anchors: pair(`segment:${name}`) }; segments[name] = segment; narrative.segments.push(segment); pending = ""; turn = undefined; cue = undefined; roleSeen = false; cursor = end + 1;
-        if (self) { segment = undefined; segmentName = ""; } continue;
+        segmentStart = cursor; segmentName = name; segment = { kind: "segment", storyKey: "pending", segmentKey: `segment:${name}`, tokenBounds: { start: narrative.tokens.length, end: narrative.tokens.length }, anchors: pair(`segment:${name}`) }; segments[name] = segment; narrative.segments.push(segment); pending = ""; pendingOffsets = []; turn = undefined; cue = undefined; roleSeen = false; cursor = end + 1;
+        if (self) { sourceMap.segments.push({ segmentKey: segment.segmentKey, name, slice: slice(segmentStart, cursor) }); segment = undefined; segmentName = ""; } continue;
       }
       if (content.startsWith("/")) {
         if (content !== `/${segmentName}`) fail("SCRIPT_SEGMENT_MISMATCH", "Segment closing tag does not match");
         flush(); if (turn && turn.tokenBounds.start === turn.tokenBounds.end) fail("SCRIPT_ROLE_EMPTY", "Role requires spoken content");
         if (cueBreak) fail("SCRIPT_CAPTION_BREAK", "Cue break must be followed by a caption unit");
+        sourceMap.segments.push({ segmentKey: segment.segmentKey, name: segmentName, slice: slice(segmentStart, end + 1) });
         segment = undefined; segmentName = ""; turn = undefined; cue = undefined; cursor = end + 1; continue;
       }
       // Unescaped single | distinguishes Dual Text from role cues.
@@ -135,10 +161,10 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
       if (split !== -1) {
         const before = pending; flush(); const left = content.slice(0, split); const right = content.slice(split + 1); const shared = !right.trim();
         let display; let spoken;
-        if (shared) { const parsed = decodeDual(left, false, true);
+        if (shared) { const parsed = decodeDual(left, cursor + 1, false, true);
           display = parsed; spoken = parsed;
-        } else { display = decodeDual(left, false); spoken = decodeDual(right, true); }
-        const tokens = addTokens(spoken.text); if (!tokens.matches.length) fail("SCRIPT_DUAL_SPEECH", "Dual Text requires spoken tokens"); bind(spoken.text, spoken.markers, tokens.matches, tokens.start);
+        } else { display = decodeDual(left, cursor + 1, false); spoken = decodeDual(right, cursor + split + 2, true); }
+        const tokens = addTokens(spoken.text, spoken.offsets); if (!tokens.matches.length) fail("SCRIPT_DUAL_SPEECH", "Dual Text requires spoken tokens"); bind(spoken.text, spoken.markers, tokens.matches, tokens.start);
         pronunciation.set(turn!, (pronunciation.get(turn!) ?? "") + spoken.text.replace(/\s+/gu, " ").trim());
         addUnit(display.text.replace(/\s+/gu, " ").trim(), /\s$/.test(before) ? " " : "", tokens.start, narrative.tokens.length, display.attributes); cursor = end + 1; continue;
       }
@@ -162,7 +188,7 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
       unit.attributes = attrs(body.slice(cursor + 1, end)); lastAttributed = true; cursor = end + 1; continue;
     }
     if (ch === "@" || ch === "}" || ch === "|") fail("SCRIPT_ESCAPE", "Reserved Script characters must be escaped");
-    pending += ch; cursor++;
+    pendingOffsets.push(cursor); pending += ch; cursor++;
   }
   if (segment) fail("SCRIPT_SEGMENT_UNCLOSED", "Unclosed Segment"); if (pending.trim()) fail("SCRIPT_BODY", "Unexpected outer text"); if (!narrative.segments.length) fail("SCRIPT_SEGMENT_CARDINALITY", "Script requires at least one Segment");
   for (const item of outerMarkers) {
@@ -210,5 +236,57 @@ export function parseScript(body: string, id: string, file = "<script>", bodySta
     dialogue: turns.map(t => `${t.role ? `${t.role}: ` : ""}${(pronunciation.get(t) ?? "").replace(/\s+/gu, " ").trim()}`).join("\n"),
   });
   const segmentTexts: ScriptResult["segmentTexts"] = Object.create(null); for (const [name, s] of Object.entries(segments)) segmentTexts[name] = texts(narrative.turns.filter(t => t.segmentKey === s.segmentKey));
-  return { narrative, segments, ...texts(narrative.turns), segmentTexts };
+  for (const entry of sourceMap.segments) entry.segmentKey = identity(entry.segmentKey);
+  for (const entry of sourceMap.tokens) entry.tokenKey = identity(entry.tokenKey);
+  sourceMap.markers = boundMarkers.map(marker => ({ ...slice(marker.offset, marker.end), name: marker.name, edge: marker.moment ? "cue" : marker.close ? "end" : "start", anchorKey: identity(marker.anchor), tokenBoundary: marker.tokenBoundary, affinity: marker.left ? "left" : "right" }));
+  const gap = (offset: number, anchorKey: string, tokenBoundary: number, affinity: "left" | "right") => sourceMap.gaps.push({ offset: bodyStart + offset, anchorKey, tokenBoundary, affinity });
+  gap(0, narrative.storyAnchors.start, 0, "right"); gap(body.length, narrative.storyAnchors.end, narrative.tokens.length, "left");
+  for (const [index, entry] of sourceMap.segments.entries()) {
+    const segment = narrative.segments.find(item => item.segmentKey === entry.segmentKey)!;
+    const selfClosing = entry.slice.text.endsWith("/>");
+    if (!selfClosing) {
+      gap(entry.slice.start - bodyStart + entry.slice.text.indexOf(">") + 1, segment.anchors.start, segment.tokenBounds.start, "left");
+      gap(entry.slice.start - bodyStart + entry.slice.text.lastIndexOf("</"), segment.anchors.end, segment.tokenBounds.end, "right");
+    } else {
+      if (index > 0) gap(entry.slice.start - bodyStart, segment.anchors.start, segment.tokenBounds.start, "right");
+      if (index < sourceMap.segments.length - 1) gap(entry.slice.end - bodyStart, segment.anchors.end, segment.tokenBounds.end, "left");
+    }
+  }
+  for (let index = 0; index < sourceMap.tokens.length; index++) {
+    const entry = sourceMap.tokens[index]!; const token = narrative.tokens[index]!;
+    gap(entry.slices[0]!.start - bodyStart, token.anchors.start, index, "right");
+    let end = entry.slices.at(-1)!.end - bodyStart;
+    while (end < body.length) {
+      if (body.startsWith("<!--", end)) { end = body.indexOf("-->", end + 4) + 3; continue; }
+      if (body.startsWith("@{", end) || body.startsWith("||", end) || /[\s<>|]/u.test(body[end]!)) break;
+      if (body[end] === "{") { end = body.indexOf("}", end + 1) + 1; continue; }
+      if (/[\p{L}\p{M}\p{N}]/u.test(body[end]!)) break;
+      end += body.codePointAt(end)! > 0xffff ? 2 : 1;
+    }
+    gap(end, token.anchors.end, index + 1, "left");
+  }
+  return { narrative, segments, ...texts(narrative.turns), segmentTexts, sourceMap };
+}
+
+/** Move only an authored marker token. All unrelated raw bytes remain untouched. */
+export function rewriteScriptAnchor(sourceMap: ScriptSourceMap, name: string, edge: ScriptMarker["edge"], anchorKey: string): ScriptPatch[] {
+  const marker = sourceMap.markers.find(item => item.name === name && item.edge === edge);
+  if (!marker) throw new DvError("STUDIO_SCRIPT_MARKER_MISSING", `No ${edge} marker for '${name}'`);
+  if (marker.anchorKey === anchorKey) return [];
+  const candidates = sourceMap.gaps.filter(item => item.anchorKey === anchorKey);
+  if (!candidates.length) throw new DvError("STUDIO_SCRIPT_ANCHOR_MISSING", `No legal insertion gap for '${anchorKey}'`);
+  const gap = candidates[0]!;
+  const spelling = edge === "cue" ? `@{${gap.affinity === "left" ? "~" : ""}${name}!}` : edge === "start" ? `@{${gap.affinity === "left" ? "~" : ""}${name}}` : `@{/${name}${gap.affinity === "right" ? "~" : ""}}`;
+  const patches: ScriptPatch[] = [
+    { start: marker.start, end: marker.end, expectedText: marker.text, text: "" },
+    { start: gap.offset, end: gap.offset, expectedText: "", text: spelling },
+  ];
+  let body = sourceMap.body;
+  for (const patch of [...patches].sort((a, b) => b.start - a.start)) body = body.slice(0, patch.start - sourceMap.bodyStart) + patch.text + body.slice(patch.end - sourceMap.bodyStart);
+  const rewritten = parseScript(body, "studio-inverse");
+  const target = rewritten.sourceMap.markers.find(item => item.name === name && item.edge === edge);
+  // Story IDs include markers, so compare the stable anchor path, not the old story digest.
+  const anchorPath = anchorKey.split(":").slice(2).join(":");
+  if (!target || target.anchorKey.split(":").slice(2).join(":") !== anchorPath) throw new DvError("STUDIO_SCRIPT_ANCHOR_INVALID", "Insertion does not bind the requested anchor");
+  return patches;
 }

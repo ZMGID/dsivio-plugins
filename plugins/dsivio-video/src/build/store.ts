@@ -165,6 +165,17 @@ export class BuildStore {
     return this.db.prepare("SELECT id FROM builds WHERE state='working' ORDER BY created,id").all().map((row) => this.read(String(row.id))!);
   }
 
+  /** Stable Build identity cursor, including staged and result-save-pending work. */
+  list(options: { before?: string; limit?: number } = {}): BuildRecord[] {
+    if (options.before !== undefined) validateBuildId(options.before);
+    const limit = options.limit ?? 20;
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new DvError("BUILD_LIST_INVALID", "Build limit must be a positive safe integer.");
+    const rows = options.before === undefined
+      ? this.db.prepare("SELECT id FROM builds ORDER BY id DESC LIMIT ?").all(limit)
+      : this.db.prepare("SELECT id FROM builds WHERE id < ? ORDER BY id DESC LIMIT ?").all(options.before, limit);
+    return rows.map((row) => this.read(String(row.id))!);
+  }
+
   facts(id: string): Fact[] {
     return this.db.prepare("SELECT fact FROM facts WHERE build=? ORDER BY seq").all(id).map((row) => JSON.parse(String(row.fact)) as Fact);
   }

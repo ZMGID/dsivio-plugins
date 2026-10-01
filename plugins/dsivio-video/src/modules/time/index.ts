@@ -10,7 +10,7 @@ import { timelineTypes } from "../../timeline/types.ts";
 import type { InstantExpression, PlacementPlan, SemanticRef, TimeLiteral, WindowExpression } from "../../timeline/types.ts";
 import { object, text, validateClockData, validateInstant, validateMomentRef, validatePlacementPlan, validateSegmentRef, validateSelectionRef, validateSemanticTake, validateTimeline, validateWindow } from "../../timeline/validate.ts";
 
-export const WINDOW_ATTRIBUTES = ["during", "at", "until", "for", "start", "end", "selection", "segment", "moment", "start-source", "end-source", "window"] as const;
+export const WINDOW_ATTRIBUTES = ["during", "at", "until", "for", "boundary", "start", "end", "selection", "segment", "moment", "start-source", "end-source", "window"] as const;
 export const INSTANT_ATTRIBUTES = ["at", "boundary", "instant", "selection", "segment", "moment"] as const;
 export type InstantOriginKind = "absolute" | "moment" | "selection" | "segment" | "program";
 export type InstantDecodeOptions = { allow?: readonly InstantOriginKind[] };
@@ -81,8 +81,20 @@ export function decodeWindowAttributes(element: ElementNode | RawElement, ctx: E
   if (attrs.window) { only(["window"]); return binding(attrs.window, [timelineTypes.window], ctx); }
   if (attrs.during) { only(["during"]); const source = attrs.during.value.kind === "literal" ? literal(attrs.during, "during", ctx, element.span) : semantic(attrs.during, ctx); if (source !== "program" && (typeof source === "string" || source.kind === "moment")) ctx.fail("TIME_FORM", "during requires program, SegmentRef or SelectionRef", attrs.during.span); return { kind: "during", source }; }
   if (attrs.at || attrs.until) {
-    const kind = attrs.at ? "at" : "until"; only([kind, "for"]); const source = pointSource(attrs[kind]!, ctx); if (typeof source !== "string" && source?.kind !== "moment") ctx.fail("TIME_FORM", "at/for and until/for accept only literals or MomentRef", element.span);
-    const duration = literal(attrs.for, "for", ctx, element.span); if (!isTimeLiteral(duration)) ctx.fail("TIME_LITERAL", "for requires an explicit-unit duration", element.span); return { kind, source: source!, duration };
+    const kind = attrs.at ? "at" : "until";
+    only([kind, "for", "boundary", "selection", "segment", "moment"]);
+    const point = attrs[kind]!;
+    const isExpression = point.value.kind === "literal" && !isTimeLiteral(point.value.text);
+    const pointElement = { ...element, attributes: [
+      { ...point, name: isExpression ? "instant" : "at" },
+      ...["boundary", "selection", "segment", "moment"].flatMap(name => attrs[name] ? [attrs[name]!] : []),
+    ] };
+    const decoded = decodeInstantAttributes(pointElement, ctx);
+    const duration = literal(attrs.for, "for", ctx, element.span);
+    if (!isTimeLiteral(duration)) ctx.fail("TIME_LITERAL", "for requires an explicit-unit duration", element.span);
+    if (decoded.kind === "expression") return { kind, source: decoded.source ?? "program", expression: decoded.expression, duration };
+    if (decoded.kind === "at-boundary") return { kind, source: decoded.source, boundary: decoded.boundary, duration };
+    return { kind, source: decoded.source, duration };
   }
   only(["start", "end", "selection", "segment", "moment", "start-source", "end-source"]);
   const start = literal(attrs.start, "start", ctx, element.span); const end = literal(attrs.end, "end", ctx, element.span);
@@ -123,7 +135,20 @@ function validateInstantExpression(data: unknown): asserts data is InstantExpres
 }
 function validateWindowExpression(data: unknown): asserts data is WindowExpression {
   const d = object(data); if (d.kind === "during") { if (d.source !== "program") { const s = object(d.source); if (s.kind === "segment") validateSegmentRef(s); else validateSelectionRef(s); } }
-  else if (d.kind === "at" || d.kind === "until") { validateInstantExpression({ kind: "at", source: d.source }); if (!isTimeLiteral(d.duration)) throw new DvError("TYPE_INVALID", "Invalid duration"); }
+  else if (d.kind === "at" || d.kind === "until") {
+    if (!isTimeLiteral(d.duration)) throw new DvError("TYPE_INVALID", "Invalid duration");
+    if (d.expression !== undefined) {
+      if (d.boundary !== undefined || typeof d.source === "string" && d.source !== "program") throw new DvError("TYPE_INVALID", "Expression windows require a matching semantic or program source");
+      if (d.source !== "program") object(d.source);
+      validateInstantExpression({ kind: "expression", expression: d.expression, ...(d.source !== "program" ? { source: d.source } : {}) });
+      if (d.source === "program" && !String(d.expression).startsWith("program.")) throw new DvError("TYPE_INVALID", "Program source requires a program expression");
+    } else {
+      if (typeof d.source === "string" || object(d.source).kind === "moment") {
+        if (d.boundary !== undefined) throw new DvError("TYPE_INVALID", "Only direct range references require boundary");
+        validateInstantExpression({ kind: "at", source: d.source });
+      } else validateInstantExpression({ kind: "at-boundary", source: d.source, boundary: d.boundary });
+    }
+  }
   else if (d.kind === "edges") { validateInstantExpression({ kind: "expression", expression: d.start, ...(d.startSource !== undefined ? { source: d.startSource } : {}) }); validateInstantExpression({ kind: "expression", expression: d.end, ...(d.endSource !== undefined ? { source: d.endSource } : {}) }); }
   else throw new DvError("TYPE_INVALID", "Invalid WindowExpression");
 }
@@ -146,7 +171,7 @@ const timelineSurface: SurfaceDef = {
   },
 };
 const windowSurface: SurfaceDef = {
-  mode: "structured", doc: { summary: "Projects a semantic or absolute half-open Window onto one Timeline; exact arithmetic, then half-up frame quantization.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Public window name." }, { name: "timeline", required: true, accepts: timelineTypes.timeline, summary: "Program axis." }, ...WINDOW_ATTRIBUTES.map(name => ({ name, required: false, accepts: "time literal or semantic reference", summary: "during, at+for, until+for, start+end, or a shared window; forms cannot mix." }))], outputs: [{ name: "", type: timelineTypes.window, summary: "Window with per-endpoint author provenance." }] },
+  mode: "structured", doc: { summary: "Projects a semantic or absolute half-open Window onto one Timeline; exact arithmetic, then half-up frame quantization. at/for and until/for retain one optional anchor offset, with a matching moment, selection or segment binding. Direct range references require boundary.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Public window name." }, { name: "timeline", required: true, accepts: timelineTypes.timeline, summary: "Program axis." }, ...WINDOW_ATTRIBUTES.map(name => ({ name, required: false, accepts: "time literal, anchor expression or semantic reference", summary: "during, at+for, until+for, start+end, or a shared window; forms cannot mix." }))], outputs: [{ name: "", type: timelineTypes.window, summary: "Window with per-endpoint author provenance." }] },
   elaborate(element, ctx: ElaborationContext) {
     if (element.kind !== "element" || element.children.some(c => c.kind !== "text" || c.text.trim())) ctx.fail("TIME_CHILD", "Window must be empty", element.span);
     const a = attributes(element, ctx, ["id", "timeline", ...WINDOW_ATTRIBUTES]);

@@ -68,6 +68,10 @@ export async function previewNeeds(definition: ExecutionDefinition, ctx: Resolve
         const capability = registry.findCapability(need.capability);
         const resolution: Resolution = !capability ? { ok: false, code: "UNKNOWN_CAPABILITY", reason: `Unknown capability ${need.capability}` } : capability.returns !== step.resultTypes[port] ? { ok: false, code: "CAPABILITY_RESULT_TYPE_MISMATCH", reason: `Capability ${need.capability} does not return ${step.resultTypes[port]}` } : await capability.resolve(need.request, ctx);
         previews.push({ kind: "request", step: step.key, label: step.label, port, capability: need.capability, resolution });
+        if (resolution.ok && need.capability.startsWith("gateway/")) {
+          definition.gatewayBackend = resolution.backend as "dsivio" | "standalone";
+          (definition.gatewaySnapshots ??= {})[`fulfil:${step.key}.${port}`] = resolution.request;
+        }
       }
       rows.set(step.key, previews);
       done.add(step.key);

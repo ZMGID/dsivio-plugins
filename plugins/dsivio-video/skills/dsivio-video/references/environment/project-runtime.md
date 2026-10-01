@@ -15,7 +15,7 @@ project/
   assets/                用户素材与已接受素材
   exports/               明确导出的交付文件
   .dsivio-video/
-    config.json          本地配置；当前 gateway 为 auto/dsivio
+    config.json          项目配置；gateway 为 auto/dsivio/standalone
     store/               项目资源库
     runtime/state.db     Build 定义、事实、远端操作与状态
     runtime/worker.json  Worker 身份

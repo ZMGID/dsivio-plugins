@@ -10,7 +10,7 @@ import { renderTypes } from "../../render/ir.ts";
 import { RECIPE, validateRecipe } from "../recipe/index.ts";
 import { imageType } from "../media/index.ts";
 import { WINDOW_ATTRIBUTES } from "../time/index.ts";
-import { decodeStickerStyle, decodeStickerTrack } from "../../components/comment-sticker/author.ts";
+import { authorStyle as decodeStickerStyle, authorTrack as decodeStickerTrack, commentStickerCompanions } from "./studio.ts";
 import { resolveProperties } from "../../components/comment-sticker/shared.ts";
 import { stickerRules, validateStickerStyle, validateStickerItem, validateStickerProgram } from "../../components/comment-sticker/validate.ts";
 import { stickerTypes } from "../../components/comment-sticker/types.ts";
@@ -20,6 +20,7 @@ import { lowerStickers } from "../../components/comment-sticker/lower.ts";
 const TEXT = "dsivio-video/text@1#Text";
 const commentSticker: ModuleDef = {
   id: "dsivio-video/comment-sticker@1", summary: "Windowed comment cards with exact fonts, optional circular avatars, tail and deterministic pop/float motion.",
+  studio: commentStickerCompanions,
   types: { Style: { summary: "Resolved comment appearance and exact font Stack.", validate: validateStickerStyle }, Item: { summary: "Resolved comment, metadata and optional avatar.", validate: validateStickerItem }, Program: { summary: "Ordered stickers on a Timeline and Canvas.", validate: validateStickerProgram } },
   surfaces: {
     Style: { mode: "structured", doc: { summary: "Static Recipe, required exact FontStack. Weight intent rounds half up to 100 steps (680/850/650 become 700/900/700), then selects the nearest supplied exact face within the primary family; fallback families retain author order. No synthesis or system fallback.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Style identity." }, { name: "recipe", required: true, accepts: RECIPE, summary: `Keys and defaults: ${Object.entries(stickerRules).map(([key, rule]) => `${key}=${JSON.stringify(rule.value)}`).join(", ")}. Enabled animation phases clamp to the card lifetime; disabled phases reserve zero frames. Hold only runs between entry and exit.` }, { name: "font", required: true, accepts: fontTypes.stack, summary: "Exact font Stack; all supplied faces retain their real weights." }], outputs: [{ name: "", type: stickerTypes.style, summary: "Comment Style." }] }, elaborate: decodeStickerStyle },

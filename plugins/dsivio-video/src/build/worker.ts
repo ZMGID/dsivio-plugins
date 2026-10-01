@@ -2,10 +2,8 @@ import { mkdir, rm } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { CapabilityDef, ExecuteContext } from "../core/capability.ts";
+import type { ExecuteContext } from "../core/capability.ts";
 import type { Fact } from "../core/graph.ts";
-import type { ModuleDef, ProducerDef } from "../core/module.ts";
-import type { Value } from "../core/value.ts";
 import { valueClass } from "../core/value.ts";
 import { DvError } from "../core/errors.ts";
 import { BuildMachine } from "../core/machine.ts";
@@ -16,13 +14,12 @@ import { operationEvidence, ResultsRepository } from "./results.ts";
 import type { ResultManifest } from "./results.ts";
 import { BuildStore } from "./store.ts";
 import type { BuildRecord, Operation } from "./store.ts";
+import { executeCommand, validateExecutionValue } from "./execute.ts";
+import type { ExecutionRegistry } from "./execute.ts";
+import { frozenRequest } from "../gateway/validate.ts";
 
 export interface BuildWorkspace { root: string; stateDir: string }
-export interface BuildRegistry {
-  findProducer(ref: string): ProducerDef | undefined;
-  findCapability(name: string): CapabilityDef | undefined;
-  findModule?(id: string): ModuleDef | undefined;
-}
+export interface BuildRegistry extends ExecutionRegistry {}
 export interface WorkerOptions {
   registry?: BuildRegistry;
   signal?: AbortSignal;
@@ -59,14 +56,16 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
   const log = (message: string): void => { console.log(`${new Date().toISOString()} ${message}`); };
   let idleSince = Date.now();
 
-  const validate = (value: Value): void => {
-    const hash = value.type.lastIndexOf("#");
-    registry.findModule?.(value.type.slice(0, hash))?.types[value.type.slice(hash + 1)]?.validate?.(value.data);
-  };
+  const executionContext = (build: BuildRecord, command: string): ExecuteContext => ({
+    buildId: build.id, commandKey: command, idempotencyKey: idempotencyKey(build.id, command),
+    projectRoot: project.root, store: resources,
+    workDir: join(project.stateDir, "runtime", "work", build.id, idempotencyKey(build.id, command).split(":")[1]!),
+    signal, log,
+  });
   const accept = (build: BuildRecord, machine: BuildMachine, fact: Fact, operation?: Operation): void => {
     if (!store.ownsWorker(token)) throw new DvError("WORKER_OWNERSHIP_LOST", "The worker no longer owns this project's execution lease");
-    if (fact.kind === "produced") for (const value of Object.values(fact.outputs)) validate(value);
-    if (fact.kind === "fulfilled") validate(fact.value);
+    if (fact.kind === "produced") for (const value of Object.values(fact.outputs)) validateExecutionValue(registry, value);
+    if (fact.kind === "fulfilled") validateExecutionValue(registry, fact.value);
     machine.validate(fact);
     store.commitFact(build.id, fact, operation, token);
     machine.accept(fact);
@@ -121,7 +120,14 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
       const machine = new BuildMachine(build.definition);
       for (const fact of store.facts(build.id)) machine.accept(fact);
       for (const op of store.operations(build.id)) {
-        if (op.phase === "submitting" && op.handle === null) fail(build, machine, op.command, new DvError("SUBMISSION_INTERRUPTED", "Submission ended without a persisted task handle; it will not be resubmitted"), op);
+        if (op.phase !== "submitting" || op.handle !== null) continue;
+        try {
+          const command = machine.ready().find(command => command.key === op.command);
+          const capability = command?.kind === "fulfil" ? registry.findCapability(command.need.capability) : undefined;
+          const recovered = capability?.executor.kind === "async" ? await capability.executor.recover?.(op.request, executionContext(build, op.command)) : null;
+          if (recovered) { op.phase = "submitted"; op.handle = recovered.handle; op.task = recovered.task ?? null; op.receipt = recovered.receipt ?? null; op.nextWake = 0; if (!store.saveOperation(op, token)) stopped.abort(); }
+          else fail(build, machine, op.command, new DvError("SUBMISSION_INTERRUPTED", "Submission ended without a persisted task handle or recoverable durable receipt; it will not be resubmitted"), op);
+        } catch (error) { fail(build, machine, op.command, error, op); }
       }
     }
     while (!signal.aborted) {
@@ -142,11 +148,11 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
           for (const command of ready) {
             if (command.kind !== "produce" || machine.state !== "running") continue;
             try {
-              const step = build.definition.steps.find((item) => item.key === command.step)!;
-              const producer = registry.findProducer(step.producer);
-              if (!producer) throw new DvError("PRODUCER_UNKNOWN", `Producer not found: ${step.producer}`);
-              const result = producer.run(machine.inputsFor(command.step));
-              accept(build, machine, { kind: "produced", command: command.key, outputs: result.outputs ?? {}, needs: result.needs ?? {} });
+              const fact = await executeCommand(machine, command, {
+                registry, resolveContext: { projectRoot: project.root, signal, gatewayBackend: build.definition.gatewayBackend },
+                executeContext: executionContext(build, command.key),
+              });
+              accept(build, machine, fact);
             } catch (error) {
               if (!store.ownsWorker(token)) { stopped.abort(); break; }
               fail(build, machine, command.key, error);
@@ -159,21 +165,43 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
           if (command.kind !== "fulfil") continue;
           let op = store.operations(build.id).find((item) => item.command === command.key);
           if (!op) {
-            op = { build: build.id, command: command.key, phase: "queued", request: command.need.request, summary: {}, backend: null, handle: null, task: null, receipt: null, nextWake: 0, progress: null, error: null };
+            const snapshot = build.definition.gatewaySnapshots?.[command.key];
+            op = { build: build.id, command: command.key, phase: "queued", request: snapshot ? frozenRequest(command.need.request, snapshot) : command.need.request, summary: {}, backend: build.definition.gatewayBackend ?? null, handle: null, task: null, receipt: null, nextWake: 0, progress: null, error: null };
             if (!store.saveOperation(op, token)) { stopped.abort(); break; }
           }
           if (op.nextWake > Date.now() || (op.phase !== "queued" && op.phase !== "submitted")) continue;
           const operation = op;
           actions.push(async () => {
             if (signal.aborted || store.read(build.id)!.cancelRequested || machine.state !== "running") return;
-            const ctx: ExecuteContext = { buildId: build.id, commandKey: command.key, idempotencyKey: idempotencyKey(build.id, command.key), projectRoot: project.root, store: resources, workDir: join(project.stateDir, "runtime", "work", build.id, idempotencyKey(build.id, command.key).split(":")[1]!), signal, log };
+            const ctx = executionContext(build, command.key);
             let retrySafe = true;
             try {
               const capability = registry.findCapability(command.need.capability);
               if (!capability) throw new DvError("CAPABILITY_UNKNOWN", `Capability not found: ${command.need.capability}`);
               await mkdir(ctx.workDir, { recursive: true });
-              if (operation.phase === "queued") {
-                const resolution = await capability.resolve(command.need.request, { projectRoot: project.root, signal });
+              if (operation.phase === "queued" && capability.executor.kind === "immediate") {
+                const fact = await executeCommand(machine, command, {
+                  registry, resolveContext: { projectRoot: project.root, signal, gatewayBackend: build.definition.gatewayBackend }, executeContext: ctx,
+                  onResolved(resolution) {
+                    if (signal.aborted || store.read(build.id)!.cancelRequested || machine.state !== "running") throw new DvError("ABORTED", "Command cancelled before submission");
+                    operation.request = resolution.request;
+                    operation.summary = resolution.summary;
+                    operation.backend = resolution.backend;
+                    operation.phase = "submitting";
+                    if (!store.beginSubmission(operation, token)) {
+                      if (!store.ownsWorker(token) || store.workerOwner()?.stopRequested) stopped.abort();
+                      throw new DvError("ABORTED", "Worker submission interrupted");
+                    }
+                    retrySafe = false;
+                  },
+                });
+                if (fact.kind === "failed") throw new DvError(fact.code, fact.message);
+                if (!store.ownsWorker(token)) { stopped.abort(); return; }
+                operation.phase = "done";
+                accept(build, machine, fact, operation);
+              } else if (operation.phase === "queued") {
+                if (capability.executor.kind !== "async") throw new DvError("OPERATION_INVALID", "Queued operation has no asynchronous executor");
+                const resolution = await capability.resolve(operation.request, { projectRoot: project.root, signal, gatewayBackend: build.definition.gatewayBackend });
                 if (!resolution.ok) throw new DvError(resolution.code, resolution.reason);
                 if (signal.aborted || store.read(build.id)!.cancelRequested || machine.state !== "running") return;
                 operation.request = resolution.request;
@@ -184,27 +212,27 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
                   if (!store.ownsWorker(token) || store.workerOwner()?.stopRequested) stopped.abort();
                   return;
                 }
-                if (capability.executor.kind === "immediate") {
-                  retrySafe = false;
-                  const value = await capability.executor.run(operation.request, ctx);
-                  if (!store.ownsWorker(token)) { stopped.abort(); return; }
-                  operation.phase = "done";
-                  accept(build, machine, { kind: "fulfilled", command: command.key, value }, operation);
-                } else {
-                  const submitted = await capability.executor.submit(operation.request, ctx);
-                  if (!store.ownsWorker(token)) { stopped.abort(); return; }
-                  operation.handle = submitted.handle;
-                  operation.receipt = submitted.receipt ?? null;
-                  operation.task = submitted.task ?? null;
-                  operation.phase = "submitted";
-                  operation.nextWake = Date.now();
-                  if (!store.saveOperation(operation, token)) { stopped.abort(); return; }
-                }
+                const submitted = await capability.executor.submit(operation.request, ctx);
+                if (!store.ownsWorker(token)) { stopped.abort(); return; }
+                operation.handle = submitted.handle;
+                operation.receipt = submitted.receipt ?? null;
+                operation.task = submitted.task ?? null;
+                operation.phase = "submitted";
+                operation.nextWake = Date.now();
+                if (!store.saveOperation(operation, token)) { stopped.abort(); return; }
               } else {
                 if (capability.executor.kind !== "async" || operation.handle === null) throw new DvError("OPERATION_INVALID", "Submitted operation has no asynchronous task handle");
                 const polled = await capability.executor.poll(operation.handle, ctx);
                 if (!store.ownsWorker(token)) { stopped.abort(); return; }
                 if (polled.receipt !== undefined) operation.receipt = polled.receipt;
+                if (polled.state === "cancelled") {
+                  operation.phase = "failed";
+                  operation.error = { code: "GATEWAY_CANCELLED", message: "The media task was cancelled; no output is published" };
+                  store.saveOperation(operation, token);
+                  store.cancel(build.id, operation.error.message);
+                  return;
+                }
+                if (store.read(build.id)!.cancelRequested) return;
                 if (polled.state === "pending") {
                   operation.nextWake = Date.now() + Math.max(0, polled.retryAfterMs);
                   operation.progress = polled.progress ?? null;

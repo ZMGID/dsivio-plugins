@@ -51,6 +51,7 @@ function fake(bindings: Record<string, Binding> = {}): FakeElaboration {
     asset() { throw new Error("No assets in text modules"); },
     fail(code, message, source) { throw new DvError(code, message, { span: source }); },
     identity() {},
+    authoring() {},
   } };
 }
 function record(key: string, type: string, data: Json): Binding { return { kind: "record", key, type, value: { type, data } }; }

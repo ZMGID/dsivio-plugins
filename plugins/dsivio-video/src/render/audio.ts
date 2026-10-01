@@ -89,6 +89,14 @@ function tempo(speed: number): string[] {
   if (speed !== 1) result.push(`atempo=${speed}`);
   return result;
 }
+
+/** Source preparation only: gain, envelopes and audible masks remain separate. */
+export function audioSourceFilters(clip: Pick<AudioClip, "sourceSamples" | "targetSamples" | "speed" | "loop">): string[] {
+  const chain = [`atrim=start_sample=${clip.sourceSamples.start}:end_sample=${clip.sourceSamples.end}`, "asetpts=N/SR/TB"];
+  if (clip.loop) chain.push(`aloop=loop=-1:size=${clip.sourceSamples.end - clip.sourceSamples.start}`, `atrim=start_sample=${clip.loop.phaseSamples}`, "asetpts=N/SR/TB");
+  chain.push(...tempo(clip.speed.numerator / clip.speed.denominator), "apad", `atrim=end_sample=${clip.targetSamples.end - clip.targetSamples.start}`, "asetpts=N/SR/TB");
+  return chain;
+}
 function envelope(clip: AudioClip): string {
   const n = `(n+${clip.targetSamples.start})`;
   let expression = "1";
@@ -124,9 +132,8 @@ export async function mixAudio(request: RenderAudioRequest, ctx: ExecuteContext)
   const labels: string[] = [];
   clips.forEach((clip, index) => {
     const duration = clip.targetSamples.end - clip.targetSamples.start;
-    const chain = [`atrim=start_sample=${clip.sourceSamples.start}:end_sample=${clip.sourceSamples.end}`, "asetpts=N/SR/TB"];
-    if (clip.loop) chain.push(`aloop=loop=-1:size=${clip.sourceSamples.end - clip.sourceSamples.start}`, `atrim=start_sample=${clip.loop.phaseSamples}`, "asetpts=N/SR/TB");
-    chain.push(...tempo(clip.speed.numerator / clip.speed.denominator), "apad", `atrim=end_sample=${duration}`, "asetpts=N/SR/TB", `volume=${clip.gain}`);
+    const chain = audioSourceFilters(clip);
+    chain.push(`volume=${clip.gain}`);
     if (clip.fadeInSamples) chain.push(`afade=t=in:ss=0:ns=${clip.fadeInSamples}`);
     if (clip.fadeOutSamples) chain.push(`afade=t=out:ss=${duration - clip.fadeOutSamples}:ns=${clip.fadeOutSamples}`);
     const gain = envelope(clip);

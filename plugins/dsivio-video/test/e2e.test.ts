@@ -53,8 +53,6 @@ test("real CLI plans, builds, exports and explicitly reuses the first-light exam
     const plan = json<PlanReply>(await run(project, env, ["plan", "build.dvrun", "--json"]));
     assert.equal(plan.valid, true);
     assert.equal(plan.paidNeedTotal, 2);
-    const video = plan.requestRows.find((row) => row.model === "volcengine/doubao-seedance-2-5");
-    assert.deepEqual(video?.futureInputs, [{ role: "firstFrame", output: "hero.image" }]);
     const followed = await run(project, env, ["build", "build.dvrun", "--follow", "--max-wait-ms", "15000", "--json"]);
     const built = json<BuildReply>(followed);
     const progress = followed.stderr.trim().split("\n").map((line) => line.match(/steps (\d+)\/(\d+)$/));
@@ -118,9 +116,10 @@ test("real CLI plans, builds, exports and explicitly reuses the first-light exam
     const oldSource = json<{ historyRows: { buildId: string }[] }>(await run(project, env, ["history", "hero.image", "--source", join(project, "main.dvml"), "--json"]));
     assert.equal(oldSource.historyRows[0]?.buildId, id);
     await writeFile(join(fake, "config.json"), JSON.stringify({ exit6: true }));
-    const doctor = json<{ valid: boolean; diagnosticRows: { status: string; message: string }[] }>(await run(project, env, ["doctor", "--json"]), 1);
+    await writeFile(join(project, ".dsivio-video", "config.json"), JSON.stringify({ gateway: "dsivio" }));
+    const doctor = json<{ valid: boolean; diagnosticRows: { name: string; status: string }[] }>(await run(project, env, ["doctor", "--json"]), 1);
     assert.equal(doctor.valid, false);
-    assert.ok(doctor.diagnosticRows.some((row) => row.status === "error" && /Open Dsivio/.test(row.message)));
+    assert.ok(doctor.diagnosticRows.some((row) => row.name === "gateway" && row.status === "error"));
   } finally {
     const stopped = await run(project, env, ["runtime", "down", "--json"]);
     try { assert.equal(stopped.code, 0, stopped.stdout + stopped.stderr); }

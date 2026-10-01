@@ -8,7 +8,7 @@ import { DvError } from "../core/errors.ts";
 import type { ModuleDef, SurfaceDef, Binding } from "../core/module.ts";
 import type { ElementNode, RawElement } from "../markup/ast.ts";
 import { Workspace } from "../source/workspace.ts";
-import { compileAuthor } from "./compile.ts";
+import { compileAuthor, compileAuthorDetailed } from "./compile.ts";
 import { isResourceRef } from "../core/value.ts";
 
 const type = "test@1#Text";
@@ -117,4 +117,34 @@ test("entry frontend and root failures retain source spans", (t) => {
     writeFileSync(file, text!);
     assert.throws(() => compileAuthor(file, f.workspace, f.registry), (error) => error instanceof DvError && error.code === code && error.span?.file.endsWith("bad.dvml") === true && error.span.line === 1);
   }
+});
+
+test("detailed authoring retains exact imported ownership and per-owner child identities", (t) => {
+  const f = fixture(t);
+  f.source("child.dvml", '<import from="test@1"/><Value id="message" value="中😀"/>');
+  const file = f.source("main.dvml", '<import from="test@1" as="t"/><import source="./child.dvml" as="one"/><t:Value id="left" value="a"><t:Child id="shared"/></t:Value><t:Value id="right" value="b"><t:Child id="shared"/></t:Value><t:Copy id="use" input={one.message}/>');
+  const { graph, authoring } = compileAuthorDetailed(file, f.workspace, f.registry);
+  const reference = authoring.references.find(r => r.authorKey === "main.dvml#use" && r.attribute === "input")!;
+  assert.equal(reference.bindingKey, graph.publicRecords.get("one.message"));
+  const owner = authoring.relations.find(r => r.bindingKey === reference.bindingKey && r.role === "output")!;
+  assert.equal(owner.authorKey, "child.dvml#message");
+  assert.equal(authoring.elements.get("main.dvml#left/shared")!.moduleId, "test@1");
+  assert.equal(authoring.elements.get("main.dvml#right/shared")!.moduleId, "test@1");
+  const author = authoring.elements.get(owner.authorKey)!;
+  const unit = authoring.units.get(author.sourceUnit)!;
+  const value = author.attributes.find(a => a.name === "value")!;
+  assert.equal(unit.text.slice(value.valueSpan.start, value.valueSpan.end), '"中😀"');
+});
+
+test("detailed overlay compilation uses edited content without changing disk source or prior index", (t) => {
+  const f = fixture(t);
+  const file = f.source("main.dvml", '<import from="test@1"/><Value id="message" value="old"/>');
+  const before = compileAuthorDetailed(file, f.workspace, f.registry);
+  const original = f.workspace.readText(file);
+  const edited = original.replace('value="old"', 'value="新😀"');
+  const after = compileAuthorDetailed(file, f.workspace, f.registry, { overlay: new Map([[file, edited]]) });
+  assert.equal(after.graph.records.get(after.graph.publicRecords.get("message")!)!.value.data, "新😀");
+  assert.equal(before.graph.records.get(before.graph.publicRecords.get("message")!)!.value.data, "old");
+  assert.equal(f.workspace.readText(file), original);
+  assert.notEqual([...after.authoring.units.values()][0]!.sourceVersion, [...before.authoring.units.values()][0]!.sourceVersion);
 });

@@ -3,7 +3,8 @@ import type { Json } from "../../core/value.ts";
 import { input } from "../pipeline/index.ts";
 import { imageProgramType } from "../../components/image-transform/types.ts";
 import { validateImageProgram } from "../../components/image-transform/validate.ts";
-import { decodeImageProgram, decodeImageTransform, operationAttributes } from "../../components/image-transform/author.ts";
+import { operationAttributes } from "../../components/image-transform/author.ts";
+import { authorProgram as decodeImageProgram, authorTransform as decodeImageTransform, imageTransformCompanions } from "./studio.ts";
 const imageType = "dsivio-video/media@1#Image";
 const operationSurfaces: Record<string, SurfaceDef> = {};
 for (const [tag, specs] of Object.entries(operationAttributes)) {
@@ -19,6 +20,7 @@ for (const [tag, specs] of Object.entries(operationAttributes)) {
 }
 const module: ModuleDef = {
   id: "dsivio-video/image-transform@1", summary: "Reusable ordered deterministic raster image operations, executed locally.",
+  studio: imageTransformCompanions,
   types: { Program: { summary: "Nonempty ordered image operations; encode occurs only last.", validate: validateImageProgram } },
   surfaces: {
     Program: { mode: "structured", elaborate: decodeImageProgram, doc: { summary: "Reusable ordered image program.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Program name." }], children: Object.keys(operationAttributes).map(tag => ({ tag, repeat: true, summary: "Empty ordered raster operation." })), outputs: [{ name: "", type: imageProgramType, summary: "Image program." }] } },

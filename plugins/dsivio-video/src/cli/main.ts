@@ -28,6 +28,8 @@ import { transcribeCommand } from "./commands/transcribe.ts";
 import { setupCommand } from "./commands/setup.ts";
 import { snapshotCommand } from "./commands/snapshot.ts";
 import { captureInstallCommand, captureRunCommand, captureScreenshotCommand } from "./commands/capture.ts";
+import { studioCommand, studioSpec } from "./commands/studio.ts";
+import { commentsCommand, commentsSpec } from "./commands/comments.ts";
 
 // Sampling options shared by `media frames`, `tile` and `tiles` (research 06 §2.4).
 const sampling = { at: "string", start: "string", end: "string", every: "string", around: "string", occurrence: "string", padding: "string", transcript: "string" } as const;
@@ -38,7 +40,7 @@ const commands: Record<string, Command> = {
   version: { usage: "version [--check]", min: 0, max: 0, options: { check: "boolean" }, run: versionCommand },
   paths: { usage: "paths", min: 0, max: 0, run: pathsCommand },
   check: { usage: "check <source.dvml|source.dvrun>", min: 1, max: 1, run: checkCommand },
-  vocabulary: { usage: "vocabulary [module...] [--tag <tag>] | --models [--kind image|video]", min: 0, max: Number.MAX_SAFE_INTEGER, options: { tag: "multiple", models: "boolean", kind: "string" }, run: vocabularyCommand },
+  vocabulary: { usage: "vocabulary [module...] [--tag <tag>] | --models [--kind image|video|speech|transcribe|matting]", min: 0, max: Number.MAX_SAFE_INTEGER, options: { tag: "multiple", models: "boolean", kind: "string" }, run: vocabularyCommand },
   plan: { usage: "plan <run.dvrun>", min: 1, max: 1, run: planCommand },
   build: { usage: "build <run.dvrun> [--title <title>] [--follow] [--max-wait-ms <ms>]", min: 1, max: 1, options: { title: "string", follow: "boolean", "max-wait-ms": "string" }, run: buildCommand },
   status: { usage: "status <id> [--watch] [--max-wait-ms <ms>]", min: 1, max: 1, options: { watch: "boolean", "max-wait-ms": "string" }, run: statusCommand },
@@ -58,12 +60,14 @@ const commands: Record<string, Command> = {
   "media boundaries": { usage: "media boundaries <file> [--rate <samples/s>] [--threshold <0..1>]", min: 1, max: 1, options: { rate: "string", threshold: "string" }, run: mediaBoundariesCommand },
   "media fetch": { usage: "media fetch <http(s)-url> --to <video>", min: 1, max: 1, options: { to: "string" }, run: mediaFetchCommand },
   "media prepare-fetch": { usage: "media prepare-fetch", min: 0, max: 0, run: mediaPrepareFetchCommand },
-  transcribe: { usage: "transcribe <audio|video> --language <code> --to <transcript.json>", min: 1, max: 1, options: { language: "string", to: "string" }, run: transcribeCommand },
+  transcribe: { usage: "transcribe <audio|video> --language <code> --to <transcript.json> [--model local/whisperx-small|provider/model]", min: 1, max: 1, options: { language: "string", to: "string", model: "string" }, run: transcribeCommand },
   setup: { usage: "setup asr|browser|fonts|raster|status [--model <name>] [--kind render|capture|all]", min: 1, max: 1, options: { model: "string", kind: "string", "browser-download-base-url": "string" }, run: setupCommand },
   snapshot: { usage: "snapshot [compiled.html|HTTP(S)-URL | --studio <base-URL>] (--at-frame <n,...> | --start-frame <n> --end-frame-exclusive <n> [--step-frames <n>]) --to <new-dir> [--grid CxR --cell <px>]", min: 0, max: 1, options: { studio: "string", "at-frame": "string", "start-frame": "string", "end-frame-exclusive": "string", "step-frames": "string", to: "string", grid: "string", cell: "string" }, run: snapshotCommand },
   "capture screenshot": { usage: "capture screenshot <URL|local-HTML> --to <image> [--full-page | --selector <selector> | --clip x,y,w,h]", min: 1, max: 1, options: { ...browserOptions, to: "string", "full-page": "boolean", selector: "string", clip: "string", transparent: "boolean", "wait-for": "string", "wait-ms": "string" }, run: captureScreenshotCommand },
   "capture run": { usage: "capture run <script.mjs> [browser options] -- [script arguments]", min: 1, max: 1, options: browserOptions, run: captureRunCommand },
   "capture install-browser": { usage: "capture install-browser [--browser-version <exact-version>] [--browser-cache <directory>] [--browser-download-base-url <URL>]", min: 0, max: 0, options: { "browser-version": "string", "browser-cache": "string", "browser-download-base-url": "string" }, run: captureInstallCommand },
+  studio: { ...studioSpec, run: studioCommand },
+  comments: { ...commentsSpec, run: commentsCommand },
   _worker: { usage: "_worker --workspace <project>", min: 0, max: 0, run: workerCommand },
 };
 const commonHelp = "Common options: --json --verbose --color auto|always|never --no-color --debug --workspace <path> --asset-root <path> (repeatable) --limit <n> (default 20) --help";

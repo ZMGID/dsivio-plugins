@@ -8,7 +8,7 @@ import { renderTypes } from "../../render/ir.ts";
 import { RECIPE } from "../recipe/index.ts";
 import { imageType } from "../media/index.ts";
 import { WINDOW_ATTRIBUTES } from "../time/index.ts";
-import { decodeEmojiStyle, decodeEmojiTrack } from "../../components/interview-emoji-reveal/author.ts";
+import { authorStyle as decodeEmojiStyle, authorTrack as decodeEmojiTrack, interviewEmojiCompanions } from "./studio.ts";
 import { emojiRules, validateEmojiStyle, validateEmojiPlan, validateEmojiProgram } from "../../components/interview-emoji-reveal/validate.ts";
 import { emojiTypes } from "../../components/interview-emoji-reveal/types.ts";
 import type { EmojiPlan, EmojiStyle } from "../../components/interview-emoji-reveal/types.ts";
@@ -16,6 +16,7 @@ import { assembleEmojiProgram } from "../../components/interview-emoji-reveal/pr
 import { lowerEmojiReveal } from "../../components/interview-emoji-reveal/lower.ts";
 const emojiReveal: ModuleDef = {
   id: "dsivio-video/interview-emoji-reveal@1", summary: "Canvas-anchored answer strip with ordered semantic reveals, preset icons and frame-deterministic bounce.",
+  studio: interviewEmojiCompanions,
   types: { Style: { summary: "Resolved strip appearance.", validate: validateEmojiStyle }, Plan: { summary: "Ordered preset and absolute/Moment reveal declarations.", validate: validateEmojiPlan }, Program: { summary: "Resolved geometry and reveal frames on a Timeline.", validate: validateEmojiProgram } },
   surfaces: {
     Style: { mode: "structured", doc: { summary: "Static Recipe; icon-size cannot exceed slot-size. One-frame reveals preserve the activation scale and coalesce coincident later stages.", attributes: [{ name: "id", required: true, accepts: "text", summary: "Style identity." }, { name: "recipe", required: true, accepts: RECIPE, summary: `Keys and defaults: ${Object.entries(emojiRules).map(([key, rule]) => `${key}=${JSON.stringify(rule.value)}`).join(", ")}.` }], outputs: [{ name: "", type: emojiTypes.style, summary: "Strip Style." }] }, elaborate: decodeEmojiStyle },

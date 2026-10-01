@@ -35,9 +35,10 @@ import { localCapabilities as pipelineCapabilities } from "../pipeline/capabilit
 import { localCapabilities as fontCapabilities } from "../fonts/capabilities.ts";
 import { localCapabilities as renderCapabilities } from "../render/capabilities.ts";
 import { rasterCapability } from "../raster/capabilities.ts";
+import { playbackAudioCapability } from "../render/playback-audio.ts";
 
 export const modules: readonly ModuleDef[] = [text, recipe, media, gen, script, program, time, pipeline, align, space, fonts, typo, sound, performance, visual, film, render, caption, captionFine, screenOverlay, commentSticker, interviewEmojiReveal, deckTrack, imageCompose, imageTransform, mediaTrack, audioTrack, ranking];
-export const capabilities: readonly CapabilityDef[] = [...gatewayCapabilities, ...pipelineCapabilities, ...fontCapabilities, ...renderCapabilities, rasterCapability];
+export const capabilities: readonly CapabilityDef[] = [...gatewayCapabilities, ...pipelineCapabilities, ...fontCapabilities, ...renderCapabilities, rasterCapability, playbackAudioCapability];
 
 export function findModule(id: string): ModuleDef | undefined {
   return modules.find((module) => module.id === id);

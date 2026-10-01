@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DvError } from "../core/errors.ts";
-import { parseDvs } from "./dvs.ts";
+import type { Json } from "../core/value.ts";
+import { parseDvs, serializeDvsValue } from "./dvs.ts";
 
 const header = '<?dvml using="dsivio-video/dvs@1"?>\n';
 const root = '<sheet version="1">\n';
@@ -67,4 +68,70 @@ test("structured values reject single quotes, trailing commas, references, and J
   for (const value of ["['x']", '{"x":1,}', "[{binding}]", "[1", "[1, /* forbidden */ 2]"]) {
     assert.throws(() => parseDvs("look.dvs", `${header}${root}media.base {\n  value: ${value};\n}\n</sheet>`), (error: unknown) => error instanceof DvError && error.code === "DVS_VALUE_STRUCTURED" && error.span?.line === 4 && error.span.column === 10);
   }
+});
+
+test("DVS UTF-16 rule/property spans preserve separators and adjacent trivia during edits", () => {
+  const body = '{\r\n  /* 中文😀 before */\r\n  settings /* name */ : /* value */ {"中文":"😀","rows":[1,{"x":true}]}  /* trailing😀 */ ;\r\n  /* adjacent */\r\n  label: \'中文😀 &amp;\\n\';\r\n  /* end */\r\n}';
+  const text = `\uFEFF${header}${root}/* 😀 prefix */\r\nmedia.base /* opening */ ${body}\r\n</sheet>`;
+  const sheet = parseDvs("utf16.dvs", text);
+  const rule = sheet.rules[0]!;
+  const settings = rule.properties[0]!;
+  const label = rule.properties[1]!;
+  const slice = (span: { start: number; end: number } | undefined) => {
+    assert.ok(span);
+    return text.slice(span.start, span.end);
+  };
+  assert.equal(sheet.source, text);
+  assert.equal(rule.nameSpan?.start, text.indexOf("media.base"));
+  assert.equal(slice(rule.nameSpan), "media.base");
+  assert.equal(slice(rule.bodySpan), body);
+  assert.equal(slice(rule.openingBrace), "{");
+  assert.equal(slice(rule.closingBrace), "}");
+  assert.equal(rule.insertion?.start, text.lastIndexOf("}"));
+  assert.equal(slice(rule.insertion), "");
+  assert.equal(slice(settings.nameSpan), "settings");
+  assert.equal(slice(settings.valueSpan), '{"中文":"😀","rows":[1,{"x":true}]}');
+  assert.equal(settings.valueRaw, slice(settings.valueSpan));
+  assert.equal(slice(settings.fullSpan), 'settings /* name */ : /* value */ {"中文":"😀","rows":[1,{"x":true}]}  /* trailing😀 */ ;');
+  assert.equal(settings.raw, slice(settings.fullSpan));
+  assert.equal(slice(settings.deleteSpan), slice(settings.fullSpan));
+  assert.equal(slice(settings.separatorSpan), ";");
+  assert.equal(slice(label.valueSpan), "'中文😀 &amp;\\n'");
+  assert.equal(label.value, "中文😀 &amp;\\n");
+  const span = settings.valueSpan!;
+  const value: Json = { 中文: "新的😀", rows: [false, { x: null }] };
+  const edited = text.slice(0, span.start) + serializeDvsValue(value) + text.slice(span.end);
+  assert.deepEqual(parseDvs("utf16.dvs", edited).rules[0]!.properties[0]!.value, value);
+  assert.ok(edited.includes('  /* trailing😀 */ ;\r\n  /* adjacent */'));
+  const deletion = settings.deleteSpan!;
+  const deleted = text.slice(0, deletion.start) + text.slice(deletion.end);
+  const remaining = parseDvs("utf16.dvs", deleted).rules[0]!.properties;
+  assert.deepEqual(remaining.map(({ name, value }) => ({ name, value })), [{ name: "label", value: "中文😀 &amp;\\n" }]);
+  assert.ok(deleted.includes("/* 中文😀 before */"));
+  assert.ok(deleted.includes("/* adjacent */"));
+});
+
+test("DVS insertion spans admit new properties without rebuilding existing text", () => {
+  const text = `${header}${root}media.empty { /* keep😀 */ }\n</sheet>`;
+  const rule = parseDvs("insert.dvs", text).rules[0]!;
+  const gap = rule.insertion!;
+  const edited = text.slice(0, gap.start) + `rows: ${serializeDvsValue([{ label: "中文😀", items: [1, null] }])}; ` + text.slice(gap.end);
+  assert.ok(edited.includes("{ /* keep😀 */ rows: "));
+  assert.deepEqual(parseDvs("insert.dvs", edited).rules[0]!.properties[0]!.value, [{ label: "中文😀", items: [1, null] }]);
+});
+
+test("DVS serializers preserve scalar escapes and strict JSON record/list values", () => {
+  const values: Json[] = [
+    null, true, false, 0, -0, -2.5, 1e21, 1e-7, Number.MIN_VALUE, Number.MAX_VALUE,
+    "", "中文😀", "50%", "null", 'He said "hi"', "don't", "line\\ntext", "a; } /* literal */", 'escaped \\"quote',
+    [1, "😀\n中文", { quote: '"', nested: [null, false] }],
+    { 中文: "😀", escapes: "\n\\\"'", nested: { list: [1, 2] } },
+  ];
+  for (const value of values) {
+    const serialized = serializeDvsValue(value);
+    const actual = parseDvs("serialize.dvs", `${header}${root}media.base { value: ${serialized}; }</sheet>`).rules[0]!.properties[0]!.value;
+    assert.deepEqual(actual, value, serialized);
+  }
+  assert.throws(() => serializeDvsValue('both " and \' delimiters'), (error: unknown) => error instanceof DvError && error.code === "DVS_VALUE_STRING");
+  assert.throws(() => serializeDvsValue({ bad: Infinity }), (error: unknown) => error instanceof DvError && error.code === "DVS_VALUE_NUMBER");
 });

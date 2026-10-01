@@ -4,6 +4,8 @@
 import type { SourceSpan } from "./errors.ts";
 import type { Json, Pending, TypeRef, Value } from "./value.ts";
 import type { DvsSheet, ElementNode, RawElement } from "../markup/ast.ts";
+import type { StudioCompanion } from "../studio/companion.ts";
+import type { AuthoringRegistration } from "./authoring.ts";
 
 export interface ModuleDef {
   /** Import address, e.g. `dsivio-video/text@1`. Type refs of this module are `${id}#Name`. */
@@ -16,6 +18,7 @@ export interface ModuleDef {
   producers: Record<string, ProducerDef>;
   /** `.dvs` readers keyed by their header `using` address, e.g. `dsivio-video/text/dvs@1`. */
   frontends?: Record<string, FrontendDef>;
+  studio?: readonly StudioCompanion[];
 }
 
 export interface TypeDef {
@@ -90,6 +93,7 @@ export interface ElaborationContext {
    * Claiming the same kind+key from another element fails with DUPLICATE_SOURCE_IDENTITY, even across import aliases.
    */
   identity(kind: string, key: string, span: SourceSpan): void;
+  authoring(registration: AuthoringRegistration): void;
 }
 
 // ---------- Producers (deterministic steps) ----------

@@ -6,9 +6,8 @@ import { pipelineTypes } from "./types.ts";
 import { timelineTypes } from "../timeline/types.ts";
 import type { AlignmentEvidence, EvidenceWord } from "./types.ts";
 import type { AsrReply } from "../asr/client.ts";
-import { transcribeLocal } from "../asr/service.ts";
-import { inspectMedia, inputPath } from "./inspect.ts";
-import { normalizeMedia, speechAudio, verifyAudio } from "./normalize.ts";
+import { inspectMedia } from "./inspect.ts";
+import { normalizeMedia, speechAudio } from "./normalize.ts";
 import { transformMedia } from "./transform.ts";
 import { extractAudio, extractFrame, stillVideo } from "./extract.ts";
 import { object, resource, clock, integer, language, validateSelection, validateMedia, validateTransform, validateAudio, validateSpeechAudio, validateAudioOptions, validateFrameOptions, validateEvidence } from "./validate.ts";
@@ -31,8 +30,8 @@ function hasPending(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasPending);
   return value !== null && typeof value === "object" && Object.values(value).some(hasPending);
 }
-type Operation = "inspect" | "normalize" | "transform" | "extract-audio" | "extract-frame" | "still-video" | "speech-audio" | "align";
-const returns: Record<Operation, string> = { inspect: pipelineTypes.inspection, normalize: timelineTypes.media, transform: timelineTypes.media, "extract-audio": pipelineTypes.audio, "extract-frame": "dsivio-video/media@1#Image", "still-video": "dsivio-video/media@1#Video", "speech-audio": pipelineTypes.speechAudio, align: pipelineTypes.evidence };
+type Operation = "inspect" | "normalize" | "transform" | "extract-audio" | "extract-frame" | "still-video" | "speech-audio";
+const returns: Record<Operation, string> = { inspect: pipelineTypes.inspection, normalize: timelineTypes.media, transform: timelineTypes.media, "extract-audio": pipelineTypes.audio, "extract-frame": "dsivio-video/media@1#Image", "still-video": "dsivio-video/media@1#Video", "speech-audio": pipelineTypes.speechAudio };
 function validateRequest(kind: Operation, request: unknown, allowPending = false): void {
   object(request);
   const check = (value: unknown, validate: (value: unknown) => void): void => { if (!allowPending || !hasPending(value)) validate(value); };
@@ -44,7 +43,6 @@ function validateRequest(kind: Operation, request: unknown, allowPending = false
     case "extract-frame": check(request.source, resource); validateFrameOptions(request); break;
     case "still-video": check(request.image, resource); check(request.clock, clock); check(request.totalFrames, value => integer(value, "Frames", 1)); break;
     case "speech-audio": check(request.sound, validateAudio); check(request.totalSamples16k, value => integer(value, "Speech samples", 1)); break;
-    case "align": check(request.audio, validateSpeechAudio); check(request.language, language); break;
   }
 }
 async function execute(kind: Operation, raw: Json, ctx: ExecuteContext): Promise<Value> {
@@ -57,13 +55,6 @@ async function execute(kind: Operation, raw: Json, ctx: ExecuteContext): Promise
     case "extract-frame": { const source = raw.source; resource(source); validateFrameOptions(raw); data = await extractFrame({ source, streamIndex: raw.streamIndex, position: raw.position }, ctx); break; }
     case "still-video": resource(raw.image); clock(raw.clock); integer(raw.totalFrames, "Frames", 1); data = await stillVideo({ image: raw.image, clock: raw.clock, totalFrames: raw.totalFrames }, ctx); break;
     case "speech-audio": validateAudio(raw.sound); integer(raw.totalSamples16k, "Speech samples", 1); data = await speechAudio({ sound: raw.sound, totalSamples16k: raw.totalSamples16k }, ctx); break;
-    case "align": {
-      validateSpeechAudio(raw.audio); language(raw.language);
-      const path = await inputPath(raw.audio.resource, ctx); await verifyAudio(path, 16000, 1, raw.audio.totalSamples, ctx);
-      const { health, reply } = await transcribeLocal(path, raw.language, ctx.signal);
-      data = evidenceFromReply(reply, raw.audio.totalSamples, raw.language, `whisperx/${health.whisperxVersion};asr/${health.serviceVersion}`);
-      ctx.log(`Alignment: ${reply.segments.length} acoustic blocks, language=${raw.language}, engine=${health.model}`); break;
-    }
   }
   return { type: returns[kind], data: data as Json };
 }

@@ -22,6 +22,7 @@ import { lowerRanking, lowerRankingAudio } from "../../components/ranking/lower.
 import { validateRankingStyle, validateRankingPlan, validateRankingProgram, validateRankingSchedule, validateRankingEvents, validateSoundStyle } from "../../components/ranking/validate.ts";
 import { RANKING_MODULE as id, rankingTypes } from "../../components/ranking/types.ts";
 import type { RankingKind, RankingStyle, RankingProgram, RankingAuthorPlan, SoundStyle } from "../../components/ranking/types.ts";
+import { rankingStudio } from "./studio.ts";
 const textType = "dsivio-video/text@1#Text", optionsType = `${id}#StyleOptions`;
 const kinds: RankingKind[] = ["TierBoard", "Column", "TopThree"];
 const styleTypes: Record<RankingKind, string> = { TierBoard: rankingTypes.tierStyle, Column: rankingTypes.columnStyle, TopThree: rankingTypes.topStyle };
@@ -39,7 +40,9 @@ for (const kind of kinds) {
       if (recipe.kind !== "record") return ctx.fail("RANKING_RECIPE", "Recipe must be readable at author time", element.span); validateRecipe(recipe.value.data);
       const font = reference(a.font, [fontTypes.face, fontTypes.stack], ctx, element);
       const options = ctx.record(null, { type: optionsType, data: { kind, styleKey: entityIdentity(ctx.file, name) } }, element.span);
-      ctx.operation({ producer: `${id}#style-${kind}-${font.type === fontTypes.face ? "face" : "stack"}`, inputs: { recipe, font, options }, publish: { style: name, sound: `${name}.sound` }, label: name, span: element.span });
+      const outputs = ctx.operation({ producer: `${id}#style-${kind}-${font.type === fontTypes.face ? "face" : "stack"}`, inputs: { recipe, font, options }, publish: { style: name, sound: `${name}.sound` }, label: name, span: element.span });
+      ctx.authoring({ binding: outputs.style!, element, role: "parameter", identity: entityIdentity(ctx.file, name) });
+      ctx.authoring({ binding: outputs.sound!, element, role: "parameter", identity: entityIdentity(ctx.file, name) });
     },
   };
   for (const [fontName, fontType] of [["face", fontTypes.face], ["stack", fontTypes.stack]]) producers[`style-${kind}-${fontName}`] = {
@@ -56,10 +59,12 @@ for (const kind of kinds) {
       const name = literal(a.id, "id", ctx, element), trackKey = entityIdentity(ctx.file, name), timeline = reference(a.timeline, [timelineTypes.timeline], ctx, element);
       if (!a.during) return ctx.fail("RANKING_WINDOW", "Ranking containers require during", element.span);
       const outer = publishWindow(timeline, decodeWindowAttributes(element, ctx), trackKey, ctx, element.span);
+      ctx.authoring({ binding: outer, element, role: "window", identity: trackKey });
       const style = reference(a.style, [styleType], ctx, element);
       const lists: Record<string, Binding[]> = { windows: [], instants: [], icons: [], texts: [] };
       const append = (name: string, binding: Binding) => { lists[name]!.push(binding); return lists[name]!.length - 1; };
       const plan: RankingAuthorPlan = { kind, trackKey, items: [] };
+      const authoredChildren: { element: typeof element; item: RankingAuthorPlan["items"][number] }[] = [];
       const prefix = element.tag.includes(":") ? element.tag.slice(0, element.tag.lastIndexOf(":") + 1) : "";
       for (const child of element.children) {
         if (child.kind === "text" && !child.text.trim()) continue;
@@ -79,6 +84,7 @@ for (const kind of kinds) {
           if (kind === "Column") item.rank = parseNumber(literal(ca.rank, "rank", ctx, child));
         }
         plan.items.push(item);
+        authoredChildren.push({ element: child, item });
       }
       validateRankingPlan(plan);
       const inputs: Record<string, Binding | Binding[]> = { timeline, style, frame: reference(a.frame, [spaceTypes.frame], ctx, element), outer, plan: ctx.record(null, { type: rankingTypes.plan, data: plan as unknown as Json }, element.span), ...lists };
@@ -90,6 +96,14 @@ for (const kind of kinds) {
         inputs.terminal = publishInstant(timeline, expression, `${trackKey}/terminal`, ctx, element.span);
       }
       const result = ctx.operation({ producer: `${id}#program-${kind}`, inputs, publish: { program: `${name}.program`, schedule: `${name}.schedule` }, label: name, span: element.span });
+      ctx.authoring({ binding: result.program!, element, role: "output", identity: trackKey });
+      for (const { element: child, item } of authoredChildren) {
+        ctx.authoring({ binding: inputs.plan as Binding, element: child, role: "plan", identity: item.itemKey });
+        for (const [port, index] of [["windows", item.windowIndex], ["instants", item.instantIndex], ["icons", item.iconIndex], ["texts", item.textIndex]] as const) {
+          if (index === undefined) continue;
+          ctx.authoring({ binding: lists[port]![index]!, element: child, role: port === "windows" ? "window" : port === "instants" ? "instant" : "input", identity: item.itemKey, consumer: { operation: result.program!.kind === "output" ? result.program!.operation : result.program!.key, port, index }, ...(port === "icons" ? { attribute: "icon" } : port === "texts" ? { attribute: "label" } : {}) });
+        }
+      }
       ctx.operation({ producer: `${id}#lower`, inputs: { program: result.program! }, publish: { visual: `${name}.visual` }, label: name, span: element.span });
       if (a["appear-sound"] || a["move-sound"]) {
         if (a.style?.value.kind !== "ref") return ctx.fail("RANKING_STYLE", "Style must expose a companion .sound output", element.span);
@@ -112,6 +126,6 @@ const ranking: ModuleDef = {
     ColumnStyle: { summary: "Column layout and exact fonts", validate(data) { validateRankingStyle(data); if (data.kind !== "Column") throw new DvError("TYPE_INVALID", "Expected ColumnStyle"); } },
     TopThreeStyle: { summary: "Three-slot layout and exact fonts", validate(data) { validateRankingStyle(data); if (data.kind !== "TopThree") throw new DvError("TYPE_INVALID", "Expected TopThreeStyle"); } },
     SoundStyle: { summary: "Normalized event gains and fade-in", validate: validateSoundStyle }, AuthorPlan: { summary: "Typed ranking author indexes", validate: validateRankingPlan }, Schedule: { summary: "Reveal stages and settled spans", validate: validateRankingSchedule }, Program: { summary: "Resolved ranking layout", validate: validateRankingProgram }, Events: { summary: "Ordered sound triggers", validate: validateRankingEvents }, StyleOptions: { summary: "Private style identity", validate(data) { const o = object(data); exact(o, ["kind", "styleKey"]); key(o.styleKey); if (!kinds.includes(o.kind as RankingKind)) throw new DvError("TYPE_INVALID", "Invalid ranking style kind"); } },
-  }, surfaces, producers,
+  }, surfaces, producers, studio: rankingStudio,
 };
 export default ranking;

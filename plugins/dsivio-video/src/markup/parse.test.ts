@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DvError } from "../core/errors.ts";
-import { parseMarkup } from "./parse.ts";
+import { parseMarkup, serializeAttributeReference, serializeAttributeValue } from "./parse.ts";
 
 const header = '<?dvml using="dsivio-video/markup@1"?>\n';
 const options = { isRaw: (tag: string) => tag === "raw" };
@@ -91,4 +91,79 @@ test("import references and unexpected attributes are rejected at their location
   for (const body of ['<dvml><import from={x}/></dvml>', '<dvml><import from="x" id="x"/></dvml>']) {
     assert.throws(() => parseMarkup("film.dvml", header + body, options), (error: unknown) => error instanceof DvError && error.code === "MARKUP_IMPORT" && error.span?.line === 2);
   }
+});
+
+test("UTF-16 tag and attribute spans retain quotes, entities, and raw references", () => {
+  const opening = '<x title = \'中文😀 &amp; &apos;\' other="&quot;" ref={ kit.hero } >';
+  const text = `${header}<dvml><!-- 😀中文 -->${opening}<child />正文😀</x ></dvml>`;
+  const document = parseMarkup("utf16.dvml", text, options);
+  const element = document.body[0]!;
+  const slice = (span: { start: number; end: number } | undefined) => {
+    assert.ok(span);
+    return text.slice(span.start, span.end);
+  };
+  assert.equal(document.source, text);
+  assert.equal(slice(document.openingTag), "<dvml>");
+  assert.equal(slice(document.closingTag), "</dvml>");
+  assert.equal(slice(element.openingTag), opening);
+  assert.equal(element.openingTag?.start, text.indexOf(opening));
+  assert.equal(slice(element.closingTag), "</x >");
+  assert.equal(element.insertion?.start, text.indexOf(" >", text.indexOf(opening)) + 1);
+  assert.equal(slice(element.insertion), "");
+  const [title, other, reference] = element.attributes;
+  assert.ok(title && other && reference);
+  assert.equal(slice(title.nameSpan), "title");
+  assert.equal(slice(title.valueSpan), "'中文😀 &amp; &apos;'");
+  assert.equal(slice(title.value.innerSpan), "中文😀 &amp; &apos;");
+  assert.equal(slice(title.fullSpan), "title = '中文😀 &amp; &apos;'");
+  assert.equal(title.raw, slice(title.fullSpan));
+  assert.equal(title.value.raw, slice(title.valueSpan));
+  assert.equal(title.value.quote, "'");
+  assert.equal(title.value.kind === "literal" && title.value.text, "中文😀 & '");
+  assert.equal(other.value.kind === "literal" && other.value.text, '"');
+  assert.equal(reference.value.kind === "ref" && reference.value.name, "kit.hero");
+  assert.equal(slice(reference.value.innerSpan), " kit.hero ");
+  assert.equal(reference.value.raw, "{ kit.hero }");
+  assert.equal(reference.value.quote, undefined);
+  assert.equal(element.kind, "element");
+  if (element.kind !== "element") return;
+  const child = element.children[0]!;
+  assert.equal(child.kind, "element");
+  if (child.kind !== "element") return;
+  assert.equal(slice(child.openingTag), "<child />");
+  assert.equal(child.closingTag, undefined);
+  assert.equal(child.insertion?.start, text.indexOf("/>"));
+});
+
+test("raw body and tag ranges remain exact through UTF-16 attribute edits", () => {
+  const body = "\r\n中文😀 <not-xml> &amp; {x}\r\n";
+  const text = `${header}<dvml><raw title="old">${body}</raw ></dvml>`;
+  const raw = parseMarkup("raw.dvml", text, options).body[0]!;
+  assert.equal(raw.kind, "raw");
+  if (raw.kind !== "raw") return;
+  assert.equal(text.slice(raw.openingTag!.start, raw.openingTag!.end), '<raw title="old">');
+  assert.equal(text.slice(raw.closingTag!.start, raw.closingTag!.end), "</raw >");
+  assert.equal(text.slice(raw.bodySpan.start, raw.bodySpan.end), body);
+  const span = raw.attributes[0]!.valueSpan!;
+  const edited = text.slice(0, span.start) + serializeAttributeValue('新😀 " & <') + text.slice(span.end);
+  const result = parseMarkup("raw.dvml", edited, options).body[0]!;
+  assert.equal(result.kind === "raw" && result.body, body);
+  assert.equal(result.attributes[0]!.value.kind === "literal" && result.attributes[0]!.value.text, '新😀 " & <');
+});
+
+test("attribute scalar and reference serializers round-trip without double decoding", () => {
+  for (const quote of ['"', "'"]) {
+    for (const value of ['中文😀 <>& "\' &amp; {literal}\n', "", true, false, null, 0, -2.5]) {
+      const document = parseMarkup("serialize.dvml", `${header}<dvml><x value=${serializeAttributeValue(value, quote)}/></dvml>`, options);
+      const actual = document.body[0]!.attributes[0]!.value;
+      assert.equal(actual.kind, "literal");
+      assert.equal(actual.kind === "literal" && actual.text, String(value));
+      assert.equal(actual.quote, quote);
+    }
+  }
+  const document = parseMarkup("serialize.dvml", `${header}<dvml><x value=${serializeAttributeReference("kit.hero-video")}/></dvml>`, options);
+  const reference = document.body[0]!.attributes[0]!.value;
+  assert.equal(reference.kind === "ref" && reference.name, "kit.hero-video");
+  assert.throws(() => serializeAttributeReference("kit.hero + 1"), (error: unknown) => error instanceof DvError && error.code === "MARKUP_REFERENCE");
+  assert.throws(() => serializeAttributeValue({ nested: 1 }), (error: unknown) => error instanceof DvError && error.code === "MARKUP_ATTRIBUTE_SCALAR");
 });

@@ -1,315 +1,160 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { setTimeout as delay } from "node:timers/promises";
-import { DvError } from "../core/errors.ts";
-import type { ExecuteContext } from "../core/capability.ts";
-import type { Json } from "../core/value.ts";
-import { imageType, videoType, audioType } from "../modules/media/index.ts";
+import { setImmediate as yieldTurn } from "node:timers/promises";
 import { gatewayCapabilities } from "./index.ts";
-import type { GenerationRequest, MediaKind } from "./request.ts";
-
-const binary = fileURLToPath(new URL("../../test/fixtures/fake-dsivio.mjs", import.meta.url));
-const caps: Record<string, Json> = { modes: ["text", "image", "frames", "reference"], durations: [5, 8], resolutions: ["720p"], ratios: ["9:16"], audioToggle: true, firstFrame: true, lastFrame: true, lastFrameNeedsFirst: true, maxReferenceImages: 2, maxReferenceVideos: 2, maxReferenceAudios: 2, referenceAudioNeedsVisual: true, framesExcludeReferences: true, localReferenceMedia: true, maxPromptLength: 10, sizes: ["1K", "2K"], qualities: ["auto", "high"], maxCount: 2, defaults: {} };
-const image: Json = { $resource: "image", bytes: 4, mime: "image/png" };
-const video: Json = { $resource: "video", bytes: 4, mime: "video/mp4" };
-const audio: Json = { $resource: "audio", bytes: 4, mime: "audio/wav" };
-function request(kind: MediaKind = "video"): GenerationRequest {
-  return { model: `p/${kind}`, prompt: "Morning", params: {}, references: { images: [], videos: [], audios: [] }, options: {} };
+import { gatewayModels, selectBackend } from "./backend.ts";
+import { withFactsRevision, validateAndResolve, ModelArgumentError } from "./description.ts";
+import type { ModelDescription } from "./description.ts";
+import type { ExecuteContext, ResolveContext } from "../core/capability.ts";
+import type { Json } from "../core/value.ts";
+import { canonicalJson } from "../core/value.ts";
+import { localAsrModel, localTranscribeExecutor, transcriptFromTask } from "../asr/backend.ts";
+import { frozenRequest, validateRequest } from "./validate.ts";
+function descriptor(extra: Partial<ModelDescription> = {}): ModelDescription {
+  return withFactsRevision({ descriptionVersion: 1, identity: "p/video", operation: "video", factsComplete: true, arguments: { prompt: { dataType: "string", required: true, minLength: 1 }, audio: { dataType: "boolean", defaultValue: true }, seed: { dataType: "integer", minimum: 0, maximum: 10 }, duration: { dataType: "integer", allowed: [20], minimum: 1, maximum: 5, specialValues: ["auto"] }, aspectRatio: { dataType: "string" }, voice: { dataType: "string", defaultValue: "default" }, voiceReference: { dataType: "mediaList", maxCount: 1 }, images: { dataType: "mediaList", maxCount: 1, maxBytes: 10, minWidth: 2, mimePatterns: ["image/*"] } }, constraints: [{ ruleId: "voice-source", check: "excludeTogether", arguments: ["voice", "voiceReference"] }, { ruleId: "noaudio-needs-seed", when: { equals: { argument: "audio", value: false } }, check: "require", arguments: ["seed"] }], products: { mediaKind: "video" }, lifecycle: { remoteCancel: "unsupported" }, billingInfo: null, ...extra });
 }
-function capability(kind: MediaKind) { const result = gatewayCapabilities.find((item) => item.name === `gateway/${kind}`); assert.ok(result); return result; }
-function executor(kind: MediaKind) { const result = capability(kind).executor; assert.ok(result.kind === "async"); return result; }
-function errorCode(expected: string) { return (error: unknown): boolean => error instanceof DvError && error.code === expected; }
-async function fixture(t: { after(fn: () => Promise<void>): void }) {
-  const dir = await mkdtemp(join(tmpdir(), "dv-gateway-"));
-  const oldBinary = process.env.DSIVIO_VIDEO_DSIVIO;
-  const oldDir = process.env.FAKE_DSIVIO_DIR;
-  process.env.DSIVIO_VIDEO_DSIVIO = binary;
-  process.env.FAKE_DSIVIO_DIR = dir;
-  t.after(async () => {
-    if (oldBinary === undefined) delete process.env.DSIVIO_VIDEO_DSIVIO; else process.env.DSIVIO_VIDEO_DSIVIO = oldBinary;
-    if (oldDir === undefined) delete process.env.FAKE_DSIVIO_DIR; else process.env.FAKE_DSIVIO_DIR = oldDir;
-    await rm(dir, { recursive: true, force: true });
-  });
-  const stored: { path: string; mime: string; bytes: Buffer }[] = [];
-  const ctx: ExecuteContext = { buildId: "build", commandKey: "command", idempotencyKey: "build:stable-key", projectRoot: dir, workDir: join(dir, "work"), signal: new AbortController().signal, log() {}, store: {
-    pathOf(ref) { return join(dir, `${ref.$resource}.bin`); },
-    async putFile(path, mime) { const bytes = await readFile(path); stored.push({ path, mime, bytes }); return { $resource: `stored-${stored.length}`, bytes: bytes.length, mime }; },
-  } };
-  return { dir, ctx, stored, async configure(config: Json) { await writeFile(join(dir, "config.json"), JSON.stringify(config)); } };
+test("finite rules preserve false/zero and presence through default revalidation", () => {
+  const d = descriptor(), source = { source: { $pending: "voice.audio", type: "Audio" }, attributes: {} };
+  const args = validateAndResolve(d, { prompt: "hello", audio: false, seed: 0, duration: "auto", voiceReference: [source] });
+  assert.equal(args.audio, false); assert.equal(args.seed, 0); assert.equal(args.voice, "default");
+  assert.deepEqual(validateAndResolve(d, args, { providedArguments: ["prompt", "audio", "seed", "duration", "voiceReference"] }), args);
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", audio: false }), (error: unknown) => error instanceof ModelArgumentError && error.detail.ruleId === "noaudio-needs-seed");
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", voice: "explicit", voiceReference: [source] }), { code: "MODEL_CONSTRAINT_FAILED" });
+  assert.equal(validateAndResolve(d, { prompt: "hello", duration: 20 }).duration, 20);
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", duration: 10 }), { code: "MODEL_ARGUMENT_INVALID" });
+});
+test("aliases are one input identity and revisions are JCS content hashes", () => {
+  const d = descriptor();
+  assert.equal(validateAndResolve(d, { prompt: "hello", aspect_ratio: "1:1" }).aspectRatio, "1:1");
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", aspect_ratio: "1:1", aspectRatio: "1:1" }), { code: "MODEL_ARGUMENT_DUPLICATE" });
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", typo: 0 }), { code: "MODEL_ARGUMENT_UNSUPPORTED" });
+  const reverse = Object.fromEntries(Object.entries(d).reverse());
+  assert.equal(withFactsRevision(reverse).factsRevision, d.factsRevision);
+  assert.notEqual(descriptor({ factsComplete: false }).factsRevision, d.factsRevision);
+  assert.throws(() => validateAndResolve({ ...d, factsRevision: "sha256:stale" }, { prompt: "hello" }), { code: "MODEL_DESCRIPTION_INVALID" });
+  assert.equal(canonicalJson({ z: -0, a: 1e30 }), '{"a":1e+30,"z":0}');
+  assert.throws(() => canonicalJson("\ud800"), /surrogate/);
+});
+test("Pending delays measured facts only, never known list quotas", () => {
+  const d = descriptor(), pending = { source: { $pending: "hero.image", type: "Image" }, attributes: {} };
+  validateAndResolve(d, { prompt: "hello", images: [pending] });
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", images: [pending, pending] }), { code: "MODEL_ARGUMENT_INVALID" });
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", images: [{ source: "/a.png", attributes: {}, mime: "image/png", bytes: 11, width: 2 }] }, { materialized: true }), { code: "MODEL_ARGUMENT_INVALID" });
+  assert.throws(() => validateAndResolve(d, { prompt: "hello", images: [{ source: "/a.png", attributes: {}, mime: "image/png", bytes: 2, width: 1 }] }, { materialized: true }), { code: "MODEL_ARGUMENT_INVALID" });
+});
+test("invalid operations, dangling conditions and cyclic derivation fail before use", () => {
+  assert.throws(() => validateAndResolve(descriptor({ constraints: [{ ruleId: "bad", check: "execute", arguments: [] }] }), {}), { code: "MODEL_DESCRIPTION_INVALID" });
+  assert.throws(() => validateAndResolve(descriptor({ constraints: [{ ruleId: "bad", check: "require", arguments: ["missing"] }] }), {}), { code: "MODEL_DESCRIPTION_INVALID" });
+  assert.throws(() => validateAndResolve(descriptor({ arguments: { a: { dataType: "string", derivedFrom: { operation: "imageAspectRatio", argument: "b" } }, b: { dataType: "string", derivedFrom: { operation: "imageAspectRatio", argument: "a" } } } }), {}), { code: "MODEL_DESCRIPTION_INVALID" });
+});
+async function fixture(t: test.TestContext) {
+  const root = await mkdtemp(join(tmpdir(), "dv-gateway-contract-"));
+  await mkdir(join(root, ".dsivio-video"));
+  const original = { command: process.env.DSIVIO_VIDEO_DSIVIO, dir: process.env.FAKE_DSIVIO_DIR };
+  process.env.DSIVIO_VIDEO_DSIVIO = fileURLToPath(new URL("../../test/fixtures/fake-dsivio.mjs", import.meta.url)); process.env.FAKE_DSIVIO_DIR = root;
+  t.after(async () => { if (original.command === undefined) delete process.env.DSIVIO_VIDEO_DSIVIO; else process.env.DSIVIO_VIDEO_DSIVIO = original.command; if (original.dir === undefined) delete process.env.FAKE_DSIVIO_DIR; else process.env.FAKE_DSIVIO_DIR = original.dir; await rm(root, { recursive: true, force: true }); });
+  const ctx: ExecuteContext = { buildId: "build", commandKey: "video", idempotencyKey: "build/video", projectRoot: root, workDir: join(root, "work"), signal: new AbortController().signal, log() {}, store: { pathOf(ref) { return join(root, ref.$resource); }, async putFile(path, mime) { return { $resource: "result", bytes: (await readFile(path)).length, mime }; } } };
+  return { root, ctx, config: async (value: Json) => writeFile(join(root, "config.json"), JSON.stringify(value)), gateway: async (gateway: string) => writeFile(join(root, ".dsivio-video", "config.json"), JSON.stringify({ gateway })) };
 }
+test("auto falls back only on unreachable App and selected contexts never switch", async t => {
+  const f = await fixture(t); await f.config({ exit6: ["models"] });
+  const ctx: ResolveContext = { projectRoot: f.root }; assert.equal(await selectBackend(ctx), "standalone");
+  await f.config({}); assert.equal(await selectBackend(ctx), "standalone");
+  const bad = join(f.root, "bad-host"); await writeFile(bad, "#!/bin/sh\nprintf 'invalid options\\n' >&2\nexit 2\n", { mode: 0o755 }); process.env.DSIVIO_VIDEO_DSIVIO = bad;
+  await assert.rejects(selectBackend({ projectRoot: f.root }), { code: "GATEWAY_MODELS_FAILED" });
+  await f.gateway("dsivio"); await assert.rejects(gatewayModels({ projectRoot: f.root }), { code: "GATEWAY_MODELS_FAILED" });
+});
+test("snapshot backend stays fixed after config change and revision changes reject submission", async t => {
+  const f = await fixture(t), cap = gatewayCapabilities.find(c => c.name === "gateway/video")!;
+  const resolution = await cap.resolve({ model: "volcengine/doubao-seedance-2-5", arguments: { prompt: "hello", generateAudio: false } }, { projectRoot: f.root });
+  assert.ok(resolution.ok); if (!resolution.ok) return;
+  await f.gateway("standalone"); const fixed = await cap.resolve(resolution.request, { projectRoot: f.root, gatewayBackend: "dsivio" }); assert.ok(fixed.ok); if (fixed.ok) assert.equal(fixed.backend, "dsivio");
+  const executor = cap.executor; assert.equal(executor.kind, "async"); if (executor.kind !== "async") return;
+  await f.config({ models: [{ id: "volcengine/doubao-seedance-2-5", kind: "video", description: descriptor() as unknown as Json }] });
+  await assert.rejects(executor.submit(resolution.request, f.ctx), { code: "MODEL_DESCRIPTION_CHANGED" });
+});
+test("cancelled task exits seven but never becomes a published output; unsupported is factual", async t => {
+  const f = await fixture(t), cap = gatewayCapabilities.find(c => c.name === "gateway/image")!;
+  const resolution = await cap.resolve({ model: "openai/gpt-image-2", arguments: { prompt: "hello" } }, { projectRoot: f.root }); assert.ok(resolution.ok); if (!resolution.ok || cap.executor.kind !== "async") return;
+  const submitted = await cap.executor.submit(resolution.request, f.ctx);
+  await f.config({ cancelOutcome: "unsupported", runningStatuses: 10 }); assert.equal(await cap.executor.cancel!(submitted.handle, f.ctx), "unsupported");
+  await f.config({}); assert.equal(await cap.executor.cancel!(submitted.handle, f.ctx), "confirmed"); assert.deepEqual(await cap.executor.poll(submitted.handle, f.ctx), { state: "cancelled", receipt: "remote-task-1" });
+});
+test("transcript evidence decodes inline or JSON outputs with exact missing measurements", async t => {
+  const f = await fixture(t), transcript: Json = { schema: "dsivio.media.transcript/1", language: "zh", sampleRate: 16000, sampleFrames: 16000, engine: { backend: "local", model: "small", protocol: "dsivio-video.asr/1", serviceVersion: "0.2.0", whisperxVersion: "3.8.6" }, segments: [{ text: "今天", words: [{ text: "今", start: 0.123456, end: 0.3, score: 0.9 }, { text: "天" }] }] };
+  const task = { kind: "transcribe", status: "succeeded", result: transcript, outputs: [] };
+  const inline = await transcriptFromTask(task, "zh", 16000); assert.equal(inline.segments[0]!.words[0]!.start, 0.123456); assert.deepEqual(inline.segments[0]!.words[1], { text: "天" });
+  const path = join(f.root, "transcript.json"); await writeFile(path, JSON.stringify(transcript)); assert.deepEqual(await transcriptFromTask({ ...task, result: null, outputs: [{ path, mime: "application/json" }] }, "zh", 16000), inline);
+  await assert.rejects(transcriptFromTask(task, "zh", 16001), { code: "ASR_RESPONSE_INVALID" });
+});
 
-test("resolve applies published defaults, keeps Pending and snapshots capabilities", async (t) => {
-  const f = await fixture(t);
-  await f.configure({ models: [{ id: "p/video", kind: "video", known: true, capabilities: { ...caps, defaults: { duration: 5, resolution: "720p", ratio: "9:16" } } }] });
-  const input = request(); input.firstFrame = { $pending: "hero.image", type: imageType }; input.prompt = { $pending: "direction", type: "dsivio-video/text@1#Text" };
-  for (let index = 0; index < 2; index++) {
-    const result = await capability("video").resolve({ ...input }, { projectRoot: f.dir });
-    assert.ok(result.ok);
-    assert.equal(result.backend, "dsivio"); assert.equal(result.cost, "paid");
-    assert.ok(result.request && typeof result.request === "object" && !Array.isArray(result.request));
-    assert.deepEqual(result.request.params, { duration: 5, resolution: "720p", ratio: "9:16" });
-    assert.deepEqual(result.request.firstFrame, input.firstFrame); assert.deepEqual(result.request.prompt, input.prompt);
-    assert.equal(result.request.backend, "dsivio"); assert.deepEqual(result.request.capabilities, { ...caps, defaults: { duration: 5, resolution: "720p", ratio: "9:16" } });
-    assert.equal(result.summary.price, "unknown");
+test("authored aspectRatio binds to the published native ratio slot and enforces its domain", async t => {
+  const f = await fixture(t), cap = gatewayCapabilities.find(c => c.name === "gateway/video")!;
+  const good = await cap.resolve({ model: "volcengine/doubao-seedance-2-5", arguments: { prompt: "native ratio", aspectRatio: "16:9" } }, { projectRoot: f.root });
+  assert.ok(good.ok);
+  if (!good.ok || cap.executor.kind !== "async") return;
+  const task = await cap.executor.submit(good.request, f.ctx);
+  assert.equal((await cap.executor.poll(task.handle, f.ctx)).state, "done");
+  const bad = await cap.resolve({ model: "volcengine/doubao-seedance-2-5", arguments: { prompt: "native ratio", aspectRatio: "4:3" } }, { projectRoot: f.root });
+  assert.equal(bad.ok, false); if (!bad.ok) assert.equal(bad.code, "MODEL_ARGUMENT_INVALID");
+});
+
+test("frozen canonical defaults accept a runtime alias, but duplicate authored identities remain errors", async () => {
+  const d = descriptor({ arguments: { prompt: { dataType: "string", required: true }, outputFormat: { dataType: "string", allowed: ["png"], defaultValue: "png" }, aspectRatio: { dataType: "string", allowed: ["1:1"] } }, constraints: [] });
+  const snapshot = validateRequest({ model: d.identity, backend: "dsivio", arguments: { prompt: "alias", output_format: "png", aspect_ratio: "1:1" }, capabilitySnapshot: d as unknown as Json });
+  const actual: Json = { model: d.identity, arguments: { prompt: "alias", output_format: "png", aspect_ratio: "1:1" } };
+  const cap = gatewayCapabilities.find(c => c.name === "gateway/video")!;
+  assert.equal((await cap.resolve(frozenRequest(actual, snapshot as unknown as Json), { projectRoot: "/", gatewayBackend: "dsivio" })).ok, true);
+  assert.throws(() => frozenRequest({ model: d.identity, arguments: { prompt: "alias", outputFormat: "png", output_format: "png" } }, snapshot as unknown as Json), { code: "MODEL_ARGUMENT_DUPLICATE" });
+});
+
+test("old host executes only advertised public parameters and refuses descriptor-dependent extras", async t => {
+  const f = await fixture(t), cap = gatewayCapabilities.find(c => c.name === "gateway/image")!;
+  await f.config({ models: [{ id: "old/image", kind: "image", known: true, capabilities: { maxCount: 2, ratios: ["1:1"] }, description: null }] });
+  const rejected = await cap.resolve({ model: "old/image", arguments: { prompt: "old", quality: "high" } }, { projectRoot: f.root });
+  assert.equal(rejected.ok, false); if (!rejected.ok) assert.equal(rejected.code, "MODEL_DESCRIPTION_UNAVAILABLE");
+  const allowed = await cap.resolve({ model: "old/image", arguments: { prompt: "old", n: 2 } }, { projectRoot: f.root });
+  assert.ok(allowed.ok); if (!allowed.ok || cap.executor.kind !== "async") return;
+  const submitted = await cap.executor.submit(allowed.request, f.ctx);
+  assert.equal((await cap.executor.poll(submitted.handle, f.ctx)).state, "done");
+});
+
+test("a default voice is not misclassified as an authored clone exclusion by native options", async t => {
+  const f = await fixture(t), cap = gatewayCapabilities.find(c => c.name === "gateway/speech")!;
+  const voiceReference = join(f.root, "reference.wav"), consentAttestation = join(f.root, "consent.txt");
+  const wav = Buffer.alloc(46); wav.write("RIFF"); wav.writeUInt32LE(38, 4); wav.write("WAVEfmt ", 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write("data", 36); wav.writeUInt32LE(2, 40);
+  await writeFile(voiceReference, wav); await writeFile(consentAttestation, "Explicit fixture voice-cloning consent");
+  const d = descriptor({ identity: "presence/speech", operation: "speech", arguments: { text: { dataType: "string", required: true }, voice: { dataType: "string", defaultValue: "preset" }, voiceReference: { dataType: "string", resource: true }, consentAttestation: { dataType: "string", resource: true } }, constraints: [{ ruleId: "voice-or-clone", check: "excludeTogether", arguments: ["voice", "voiceReference"] }, { ruleId: "clone-consent", when: { provided: "voiceReference" }, check: "require", arguments: ["consentAttestation"] }] });
+  await f.config({ models: [{ id: d.identity, kind: "speech", known: true, capabilities: null, description: d as unknown as Json }], runningStatuses: 10 });
+  const raw = { model: d.identity, arguments: { text: "Clone boundary", voiceReference, consentAttestation } }, resolution = await cap.resolve(raw, { projectRoot: f.root });
+  assert.ok(resolution.ok); if (!resolution.ok || cap.executor.kind !== "async") return;
+  const task = await cap.executor.submit(resolution.request, f.ctx);
+  assert.equal((await cap.executor.poll(task.handle, f.ctx)).state, "pending");
+  const conflict = await cap.resolve({ ...raw, arguments: { ...raw.arguments, voice: "preset" } }, { projectRoot: f.root });
+  assert.equal(conflict.ok, false); if (!conflict.ok) assert.equal(conflict.code, "MODEL_CONSTRAINT_FAILED");
+});
+
+test("local idempotency and recovery bind WAV contents, not just a same-size filename", { timeout: 10_000 }, async t => {
+  const f = await fixture(t), oldHome = process.env.HOME; process.env.HOME = f.root;
+  t.after(() => { if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome; });
+  await writeFile(join(f.root, ".dsivio-video", "config.json"), JSON.stringify({ gateway: "standalone", asr: { autoInstall: false } }));
+  const audioFile = join(f.root, "sample.wav"), wav = Buffer.alloc(46);
+  wav.write("RIFF"); wav.writeUInt32LE(38, 4); wav.write("WAVEfmt ", 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write("data", 36); wav.writeUInt32LE(2, 40);
+  await writeFile(audioFile, wav);
+  const request: Json = { model: "local/whisperx-small", backend: "standalone", capabilitySnapshot: localAsrModel().description as unknown as Json, arguments: { audioFile, language: "en" } };
+  const task = await localTranscribeExecutor.submit(request, f.ctx);
+  for (;;) {
+    const state = await localTranscribeExecutor.poll(task.handle, f.ctx);
+    if (state.state === "failed") { assert.equal(state.code, "ASR_INSTALL_REQUIRED"); break; }
+    assert.equal(state.state, "pending");
+    await yieldTurn();
   }
-});
-
-test("resolve validates every capability rule and returns stable error codes", async (t) => {
-  const f = await fixture(t);
-  type Case = { code: string; kind?: MediaKind; change: (request: GenerationRequest) => void; caps?: Record<string, Json>; known?: boolean };
-  const cases: Case[] = [
-    { code: "GEN_DURATION_UNSUPPORTED", change: (r) => { r.params.duration = 9; } },
-    { code: "GEN_RESOLUTION_UNSUPPORTED", change: (r) => { r.params.resolution = "4k"; } },
-    { code: "GEN_RATIO_UNSUPPORTED", change: (r) => { r.params.ratio = "1:1"; } },
-    { code: "GEN_AUDIO_UNSUPPORTED", caps: { audioToggle: false }, change: (r) => { r.params.audio = false; } },
-    { code: "GEN_FIRST_FRAME_UNSUPPORTED", caps: { firstFrame: false }, change: (r) => { r.firstFrame = { $pending: "first", type: imageType }; } },
-    { code: "GEN_LAST_FRAME_UNSUPPORTED", caps: { lastFrame: false }, change: (r) => { r.lastFrame = image; } },
-    { code: "GEN_LAST_FRAME_NEEDS_FIRST", change: (r) => { r.lastFrame = image; } },
-    { code: "GEN_REFERENCE_IMAGES_LIMIT", change: (r) => { r.references.images = [image, image, { $pending: "third", type: imageType }]; } },
-    { code: "GEN_REFERENCE_VIDEOS_LIMIT", change: (r) => { r.references.videos = [video, video, { $pending: "third", type: videoType }]; } },
-    { code: "GEN_REFERENCE_AUDIOS_LIMIT", change: (r) => { r.references.audios = [audio, audio, { $pending: "third", type: audioType }]; } },
-    { code: "GEN_REFERENCE_AUDIO_NEEDS_VISUAL", change: (r) => { r.references.audios = [{ $pending: "voice", type: audioType }]; } },
-    { code: "GEN_FRAMES_EXCLUDE_REFERENCES", change: (r) => { r.firstFrame = image; r.references.images = [image]; } },
-    { code: "GEN_LOCAL_REFERENCE_UNSUPPORTED", caps: { localReferenceMedia: false }, change: (r) => { r.references.videos = [video]; } },
-    { code: "GEN_PROMPT_TOO_LONG", change: (r) => { r.prompt = "01234567890"; } },
-    { code: "GEN_SIZE_UNSUPPORTED", kind: "image", change: (r) => { r.params.size = "4K"; } },
-    { code: "GEN_QUALITY_UNSUPPORTED", kind: "image", change: (r) => { r.params.quality = "ultra"; } },
-    { code: "GEN_COUNT_UNSUPPORTED", kind: "image", change: (r) => { r.params.count = 3; } },
-    { code: "GEN_CAPABILITIES_UNKNOWN", known: false, change: (r) => { r.params.audio = false; } },
-    { code: "GEN_CAPABILITIES_UNKNOWN", known: false, change: (r) => { r.firstFrame = image; } },
-    { code: "GEN_CAPABILITIES_UNKNOWN", known: false, change: (r) => { r.references.images = [image]; } },
-    { code: "GEN_OPTION_UNSUPPORTED", change: (r) => { r.options.seed = 0; } },
-    { code: "GEN_MODEL_REQUIRED", change: (r) => { r.model = ""; } },
-    { code: "GEN_PARAM_INVALID", change: (r) => { r.params.duration = -1; } },
-    { code: "GEN_PARAM_UNSUPPORTED", change: (r) => { r.params.seed = 1; } },
-    { code: "TYPE_INVALID", change: (r) => { r.firstFrame = video; } },
-  ];
-  for (const row of cases) {
-    const kind = row.kind ?? "video";
-    await f.configure({ models: [{ id: `p/${kind}`, kind, known: row.known ?? true, capabilities: row.known === false ? null : { ...caps, ...row.caps } }] });
-    const input = request(kind); row.change(input);
-    const result = await capability(kind).resolve({ ...input }, { projectRoot: f.dir });
-    assert.equal(result.ok, false, row.code);
-    if (!result.ok) assert.equal(result.code, row.code);
-  }
-  await f.configure({ models: [{ id: "p/video", kind: "video", known: true, capabilities: caps }] });
-  const input = request(); input.model = "p/not-enabled";
-  const unavailable = await capability("video").resolve({ ...input }, { projectRoot: f.dir });
-  assert.ok(!unavailable.ok); assert.equal(unavailable.code, "GEN_MODEL_NOT_ENABLED"); assert.match(unavailable.reason, /p\/video/);
-});
-
-test("resolve permits only described exceptions, supported combinations, and prompt-only unknown models", async (t) => {
-  const f = await fixture(t);
-  const cases: { kind: MediaKind; input: GenerationRequest; known: boolean; extra: Record<string, Json> }[] = [];
-  const tail = request(); tail.lastFrame = image;
-  cases.push({ kind: "video", input: tail, known: true, extra: { lastFrameNeedsFirst: false } });
-  const audioOnly = request(); audioOnly.references.audios = [audio];
-  cases.push({ kind: "video", input: audioOnly, known: true, extra: { referenceAudioNeedsVisual: false } });
-  const mixed = request(); mixed.firstFrame = image; mixed.references.images = [image];
-  cases.push({ kind: "video", input: mixed, known: true, extra: { framesExcludeReferences: false } });
-  const boundary = request(); boundary.prompt = "0123456789"; boundary.params = { duration: 5, resolution: "720p", ratio: "9:16", audio: false }; boundary.references.images = [image, image]; boundary.references.audios = [audio];
-  cases.push({ kind: "video", input: boundary, known: true, extra: {} });
-  const pixel = request("image"); pixel.params = { size: "1234x5678", ratio: "9:16", quality: "auto", count: 2 };
-  cases.push({ kind: "image", input: pixel, known: true, extra: { customPixelSize: true } });
-  cases.push({ kind: "video", input: request(), known: false, extra: {} });
-  for (const row of cases) {
-    await f.configure({ models: [{ id: row.input.model, kind: row.kind, known: row.known, capabilities: row.known ? { ...caps, ...row.extra } : null }] });
-    const result = await capability(row.kind).resolve({ ...row.input }, { projectRoot: f.dir });
-    assert.ok(result.ok, !result.ok ? result.reason : "");
-  }
-});
-
-test("resolve selects config honestly and surfaces Dsivio unavailable", async (t) => {
-  const f = await fixture(t);
-  await mkdir(join(f.dir, ".dsivio-video"));
-  await writeFile(join(f.dir, ".dsivio-video", "config.json"), '{"gateway":"standalone"}');
-  let result = await capability("video").resolve({ ...request() }, { projectRoot: f.dir });
-  assert.ok(!result.ok); assert.equal(result.code, "GATEWAY_BACKEND_INVALID");
-  await writeFile(join(f.dir, ".dsivio-video", "config.json"), '{"gateway":"dsivio"}');
-  await f.configure({ exit6: ["models"] });
-  result = await capability("video").resolve({ ...request() }, { projectRoot: f.dir });
-  assert.ok(!result.ok); assert.equal(result.code, "GATEWAY_UNAVAILABLE"); assert.match(result.reason, /open Dsivio/);
-});
-
-test("submit and poll use stable idempotency, prompt files, media flags and first matching output", async (t) => {
-  const f = await fixture(t);
-  for (const kind of ["image", "video"] as const) {
-    await f.configure({ runningStatuses: 1 });
-    const exec = executor(kind);
-    const input = request(kind);
-    input.prompt = "中文 Morning\nwith exact bytes";
-    if (kind === "image") input.params = { size: "2K", quality: "high", ratio: "9:16", count: 2 };
-    else { input.params = { duration: 5, resolution: "720p", ratio: "9:16", audio: false }; input.firstFrame = image; input.lastFrame = image; input.references.videos = [video]; input.references.audios = [audio]; }
-    input.references.images = [image];
-    f.ctx.idempotencyKey = `build:${kind}-key`;
-    const submitted = await exec.submit({ ...input }, f.ctx);
-    const same = await exec.submit({ ...input }, f.ctx);
-    assert.deepEqual(same.handle, submitted.handle); assert.equal(same.receipt, submitted.receipt);
-    const running = await exec.poll(submitted.handle, f.ctx);
-    assert.equal(running.state, "pending");
-    assert.equal(running.receipt, submitted.receipt);
-    const done = await exec.poll(submitted.handle, f.ctx);
-    assert.ok(done.state === "done"); assert.equal(done.value.type, kind === "image" ? imageType : videoType);
-    assert.equal(f.stored.at(-1)!.mime, `${kind}/${kind === "image" ? "png" : "mp4"}`);
-    assert.deepEqual(f.stored.at(-1)!.bytes.subarray(0, kind === "image" ? 8 : 12), kind === "image" ? Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]) : Buffer.from([0, 0, 0, 24, ...Buffer.from("ftypisom")]));
-  }
-  const calls = (await readFile(join(f.dir, "calls.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-  const imageCall = calls.find((call) => call.args[1] === "image"); const videoCall = calls.find((call) => call.args[1] === "video");
-  assert.equal(imageCall.prompt, "中文 Morning\nwith exact bytes");
-  assert.ok(imageCall.args.includes("build:image-key")); assert.ok(imageCall.args.includes("--n"));
-  assert.ok(videoCall.args.includes("build:video-key")); assert.ok(videoCall.args.includes('{"generateAudio":false}'));
-  assert.ok(videoCall.args.includes(join(f.dir, "image.bin"))); assert.ok(videoCall.args.includes(join(f.dir, "video.bin"))); assert.ok(videoCall.args.includes(join(f.dir, "audio.bin")));
-});
-
-test("submit classifies rejection, uncertainty and closed Dsivio without losing the key", async (t) => {
-  const f = await fixture(t);
-  const exec = executor("image");
-  for (const [exit, code] of [[2, "GATEWAY_REJECTED"], [3, "GATEWAY_REJECTED"], [5, "GATEWAY_UNCERTAIN"], [6, "GATEWAY_UNAVAILABLE"]] as const) {
-    await f.configure({ submitExit: exit });
-    await assert.rejects(exec.submit({ ...request("image") }, f.ctx), errorCode(code));
-  }
-  await f.configure({});
-  const submitted = await exec.submit({ ...request("image") }, f.ctx);
-  assert.ok(submitted.handle);
-  const state = JSON.parse(await readFile(join(f.dir, "state.json"), "utf8"));
-  assert.equal(Object.keys(state.tasks).length, 1); assert.equal(state.keys[f.ctx.idempotencyKey], "task-1");
-});
-
-test("poll closed Dsivio waits, terminal failures preserve charge uncertainty", async (t) => {
-  const f = await fixture(t);
-  const exec = executor("video");
-  await f.configure({});
-  const submitted = await exec.submit({ ...request() }, f.ctx);
-  await f.configure({ exit6: ["status"] });
-  const closed = await exec.poll(submitted.handle, f.ctx);
-  assert.ok(closed.state === "pending"); assert.equal(closed.retryAfterMs, 10000); assert.match(closed.progress!, /Dsivio is closed/);
-  for (const [remoteId, canResume, charged] of [[null, false, "maybe"], ["receipt", false, "maybe"], [null, true, "maybe"]] as const) {
-    await f.configure({ finalStatus: "failed", remoteId, canResume, error: "Vendor rejected output" });
-    const failed = await exec.poll(submitted.handle, f.ctx);
-    assert.ok(failed.state === "failed");
-    assert.equal(failed.code, "GATEWAY_FAILED");
-    assert.equal(failed.charged, charged);
-    assert.equal(failed.receipt, remoteId ?? undefined);
-  }
-});
-
-test("poll imports only the first output of the requested media kind", async (t) => {
-  const f = await fixture(t);
-  const exec = executor("image");
-  await f.configure({});
-  const submitted = await exec.submit({ ...request("image") }, f.ctx);
-  const first = join(f.dir, "first.png");
-  const second = join(f.dir, "second.png");
-  await writeFile(first, Buffer.from([137, 80, 78, 71, 1]));
-  await writeFile(second, Buffer.from([137, 80, 78, 71, 2]));
-  await f.configure({ outputs: [{ path: join(f.dir, "ignored.mp4"), mime: "video/mp4" }, { path: first, mime: "image/png" }, { path: second, mime: "image/png" }] });
-  const result = await exec.poll(submitted.handle, f.ctx);
-  assert.ok(result.state === "done");
-  assert.equal(f.stored.length, 1);
-  assert.equal(f.stored[0]!.path, first);
-  assert.deepEqual(f.stored[0]!.bytes, Buffer.from([137, 80, 78, 71, 1]));
-});
-
-test("regression: paid uncertainty stays maybe unless Dsivio explicitly rejects", async (t) => {
-  const f = await fixture(t);
-  const exec = executor("video");
-  const submitted = await exec.submit({ ...request() }, f.ctx);
-  for (const row of [
-    { submissionState: "uncertain", statusExit: 5, remoteId: null, charged: "maybe" },
-    { submissionState: null, statusExit: 4, remoteId: null, charged: "maybe" },
-    { submissionState: "rejected", statusExit: 3, remoteId: null, charged: "no" },
-    { submissionState: "rejected", statusExit: 5, remoteId: null, charged: "maybe" },
-  ]) {
-    await f.configure({ finalStatus: "failed", ...row });
-    const result = await exec.poll(submitted.handle, f.ctx);
-    assert.ok(result.state === "failed");
-    assert.equal(result.charged, row.charged);
-  }
-});
-
-test("regression: nonzero submissions preserve recoverable task handles and receipts", async (t) => {
-  const f = await fixture(t);
-  const exec = executor("video");
-  for (const exit of [5, 124, 4]) {
-    f.ctx.idempotencyKey = `recover:${exit}`;
-    await f.configure({ submitExit: exit, submitReply: true, remoteId: `receipt-${exit}` });
-    const submitted = await exec.submit({ ...request() }, f.ctx);
-    assert.equal(submitted.receipt, `receipt-${exit}`);
-    await f.configure(exit === 4 ? { finalStatus: "failed" } : { runningStatuses: 1 });
-    const result = await exec.poll(submitted.handle, f.ctx);
-    assert.equal(result.state, exit === 4 ? "failed" : "pending");
-  }
-  const state = JSON.parse(await readFile(join(f.dir, "state.json"), "utf8"));
-  assert.equal(Object.keys(state.tasks).length, 3);
-});
-
-test("regression: resolve derives video modes with reference and tail-frame precedence", async (t) => {
-  const f = await fixture(t);
-  for (const mode of ["text", "image", "frames", "reference"]) {
-    const input = request();
-    if (mode === "image") input.firstFrame = { $pending: "first", type: imageType };
-    if (mode === "frames") { input.firstFrame = image; input.lastFrame = { $pending: "last", type: imageType }; }
-    if (mode === "reference") { input.firstFrame = image; input.lastFrame = image; input.references.images = [{ $pending: "ref", type: imageType }]; }
-    for (const allowed of [true, false]) {
-      await f.configure({ models: [{ id: input.model, kind: "video", known: true, capabilities: { ...caps, framesExcludeReferences: false, modes: allowed ? [mode] : ["different"] } }] });
-      const result = await capability("video").resolve({ ...input }, { projectRoot: f.dir });
-      assert.equal(result.ok, allowed, mode);
-      if (!result.ok) assert.equal(result.code, "GEN_MODE_UNSUPPORTED");
-    }
-  }
-});
-
-test("regression: prompt limits count Unicode scalars except Runway UTF-16", async (t) => {
-  const f = await fixture(t);
-  for (const protocol of ["seedance", "runway"]) {
-    await f.configure({ models: [{ id: "p/video", kind: "video", known: true, capabilities: { ...caps, protocol, maxPromptLength: 2 } }] });
-    const input = request(); input.prompt = "😀😀";
-    const result = await capability("video").resolve({ ...input }, { projectRoot: f.dir });
-    assert.equal(result.ok, protocol !== "runway");
-    if (!result.ok) assert.equal(result.code, "GEN_PROMPT_TOO_LONG");
-  }
-});
-
-test("regression: aborting an accepted slow submit is not safe gateway unavailability", async (t) => {
-  const f = await fixture(t);
-  await f.configure({ submitDelayMs: 60_000 });
-  const controller = new AbortController();
-  t.after(async () => { controller.abort(); });
-  f.ctx.signal = controller.signal;
-  const outcome = executor("video").submit({ ...request() }, f.ctx).then(() => null, (error: unknown) => error);
-  const deadline = Date.now() + 5_000;
-  let accepted = false;
-  while (Date.now() < deadline) {
-    try {
-      accepted = (await readFile(join(f.dir, "state.json"), "utf8")).includes(f.ctx.idempotencyKey);
-      if (accepted) break;
-    } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error;
-    }
-    await delay(10);
-  }
-  assert.ok(accepted, "Fake Dsivio must accept the paid task before interruption");
-  controller.abort();
-  const error = await outcome;
-  assert.ok(error instanceof DvError);
-  assert.equal(error.code, "ABORTED");
-  assert.notEqual(error.code, "GATEWAY_UNAVAILABLE");
-  assert.ok(error.cause instanceof Error);
-  assert.equal(error.cause.name, "AbortError");
-  const state = JSON.parse(await readFile(join(f.dir, "state.json"), "utf8"));
-  assert.equal(Object.keys(state.tasks).length, 1);
-});
-
-test("only missing commands, not permission failures, are gateway unavailable", { skip: process.platform === "win32" }, async (t) => {
-  const f = await fixture(t);
-  process.env.DSIVIO_VIDEO_DSIVIO = join(f.dir, "missing");
-  await assert.rejects(executor("video").submit({ ...request() }, f.ctx), errorCode("GATEWAY_UNAVAILABLE"));
-  const inaccessible = join(f.dir, "nonexecutable");
-  await writeFile(inaccessible, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
-  process.env.DSIVIO_VIDEO_DSIVIO = inaccessible;
-  await assert.rejects(executor("video").submit({ ...request() }, f.ctx), errorCode("GATEWAY_COMMAND_FAILED"));
+  assert.ok(await localTranscribeExecutor.recover!(request, f.ctx));
+  wav[44] = 1; await writeFile(audioFile, wav);
+  await assert.rejects(localTranscribeExecutor.submit(request, f.ctx), { code: "IDEMPOTENCY_CONFLICT" });
+  await assert.rejects(localTranscribeExecutor.recover!(request, f.ctx), { code: "IDEMPOTENCY_CONFLICT" });
 });

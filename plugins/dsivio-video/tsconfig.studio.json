@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "lib": ["es2024", "DOM", "DOM.Iterable"],
+    "types": [],
+    "module": "esnext",
+    "moduleResolution": "bundler"
+  },
+  "include": ["src/studio/ui/**/*.js", "src/studio/protocol.ts", "src/studio/companion.ts"],
+  "exclude": ["src/studio/ui/**/*.test.js"]
+}

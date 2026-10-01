@@ -17,6 +17,8 @@ export interface Plan {
   overrides: { output: string; candidate: string }[];
   unreachable: { key: string; label: string }[];
   assets: Map<string, SourceAsset>;
+  /** Explicit display roots resolved by the same Candidate selection and pruning pass. */
+  rootRecords?: string[];
 }
 
 export interface RunCheck {
@@ -31,8 +33,8 @@ export function checkRun(run: RunIntent, author: AuthorGraph, workspace: Workspa
   return { targets: [...run.targets], overrides: plan.overrides, unreachable: plan.unreachable, unresolvedHistory };
 }
 
-export async function planRun(run: RunIntent, author: AuthorGraph, history: HistoryReader, workspace: Workspace, registry: AuthorRegistry = builtins): Promise<Plan> {
-  const { plan, unresolvedHistory } = selectRun(run, author, workspace, registry);
+export async function planRun(run: RunIntent, author: AuthorGraph, history: HistoryReader, workspace: Workspace, registry: AuthorRegistry = builtins, roots?: readonly InputSource[]): Promise<Plan> {
+  const { plan, unresolvedHistory } = selectRun(run, author, workspace, registry, roots);
   const historicalValues = new Map<string, Value>();
   for (const row of unresolvedHistory) {
     const candidate = run.candidates.get(row.candidate)!;
@@ -59,7 +61,7 @@ function bindSeed(definition: ExecutionDefinition, record: string, value: Value,
   Object.defineProperty(definition.seeds, record, { value, enumerable: true, writable: true, configurable: true });
 }
 
-function selectRun(run: RunIntent, author: AuthorGraph, workspace: Workspace, registry: AuthorRegistry): { plan: Plan; unresolvedHistory: RunCheck["unresolvedHistory"] } {
+function selectRun(run: RunIntent, author: AuthorGraph, workspace: Workspace, registry: AuthorRegistry, roots?: readonly InputSource[]): { plan: Plan; unresolvedHistory: RunCheck["unresolvedHistory"] } {
   const definition: ExecutionDefinition = { schema: "dsivio-video.definition/1", author: author.source, run: run.file, targets: [...run.targets], seeds: {}, forwarded: {}, reused: {}, steps: [], outputs: {}, modules: [] };
   const plan: Plan = { definition, overrides: [], unreachable: [], assets: new Map() };
   const steps = new Map<string, Step>();
@@ -173,7 +175,8 @@ function selectRun(run: RunIntent, author: AuthorGraph, workspace: Workspace, re
     resolving.delete(key);
     steps.set(key, step);
   };
-  for (const target of run.targets) resolveName(target, false);
+  if (roots) plan.rootRecords = roots.map(resolveInput);
+  else for (const target of run.targets) resolveName(target, false);
   for (const [name, output] of author.outputs) {
     if (usedNames.has(name)) continue;
     const record = outputKey(output.operation, output.port);
