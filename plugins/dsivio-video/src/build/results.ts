@@ -3,6 +3,8 @@ import { copyFile, cp, link, lstat, mkdir, readFile, readdir, rename, rm, writeF
 import { dirname, join, resolve } from "node:path";
 import type { HistoryReader, HistoricalOutput } from "../core/history.ts";
 import type { Json, TypeRef, Value, ValueClass } from "../core/value.ts";
+import type { ExecutionDefinition } from "../core/graph.ts";
+import type { Operation } from "./store.ts";
 import { isResourceRef, valueClass } from "../core/value.ts";
 import { DvError } from "../core/errors.ts";
 import { validateBuildId } from "./ids.ts";
@@ -10,10 +12,13 @@ import { ProjectStore } from "./resources.ts";
 
 export type ResultOutput = { type: TypeRef; class: ValueClass; value: Json } | { forward: { build: string; output: string } };
 export interface OperationEvidence {
-  command: string;
+  outputs: string[];
   backend: string | null;
   model: string | null;
+  task: string | null;
+  summary: Record<string, Json>;
   phase: string;
+  progress: string | null;
   receipt: string | null;
   error: { code: string; message: string } | null;
 }
@@ -31,6 +36,19 @@ export interface ResultManifest {
   operations: OperationEvidence[];
 }
 export interface ListOptions { limit?: number; before?: string }
+
+export function operationEvidence(definition: ExecutionDefinition, operation: Operation): OperationEvidence {
+  let record: string | undefined;
+  for (const step of definition.steps) {
+    for (const [port, binding] of Object.entries(step.results)) {
+      if (operation.command === `fulfil:${step.key}.${port}`) record = binding;
+    }
+  }
+  const outputs = Object.entries(definition.outputs).filter(([, binding]) => binding.record === record).map(([name]) => name);
+  const model = typeof operation.summary.model === "string" ? operation.summary.model :
+    operation.request !== null && typeof operation.request === "object" && !Array.isArray(operation.request) && typeof operation.request.model === "string" ? operation.request.model : null;
+  return { outputs, backend: operation.backend, model, task: operation.task, receipt: operation.receipt, summary: operation.summary, phase: operation.phase, progress: operation.progress, error: operation.error };
+}
 
 export class ResultsRepository implements HistoryReader {
   readonly stateDir: string;

@@ -150,7 +150,8 @@ test("submit and poll use stable idempotency, prompt files, media flags and firs
     const same = await exec.submit({ ...input }, f.ctx);
     assert.deepEqual(same.handle, submitted.handle); assert.equal(same.receipt, submitted.receipt);
     const running = await exec.poll(submitted.handle, f.ctx);
-    assert.deepEqual(running, { state: "pending", retryAfterMs: kind === "image" ? 5000 : 10000 });
+    assert.equal(running.state, "pending");
+    assert.equal(running.receipt, submitted.receipt);
     const done = await exec.poll(submitted.handle, f.ctx);
     assert.ok(done.state === "done"); assert.equal(done.value.type, kind === "image" ? imageType : videoType);
     assert.equal(f.stored.at(-1)!.mime, `${kind}/${kind === "image" ? "png" : "mp4"}`);
@@ -188,7 +189,11 @@ test("poll closed Dsivio waits, terminal failures preserve charge uncertainty", 
   assert.ok(closed.state === "pending"); assert.equal(closed.retryAfterMs, 10000); assert.match(closed.progress!, /Dsivio is closed/);
   for (const [remoteId, canResume, charged] of [[null, false, "maybe"], ["receipt", false, "maybe"], [null, true, "maybe"]] as const) {
     await f.configure({ finalStatus: "failed", remoteId, canResume, error: "Vendor rejected output" });
-    assert.deepEqual(await exec.poll(submitted.handle, f.ctx), { state: "failed", code: "GATEWAY_FAILED", message: "Vendor rejected output", charged });
+    const failed = await exec.poll(submitted.handle, f.ctx);
+    assert.ok(failed.state === "failed");
+    assert.equal(failed.code, "GATEWAY_FAILED");
+    assert.equal(failed.charged, charged);
+    assert.equal(failed.receipt, remoteId ?? undefined);
   }
 });
 

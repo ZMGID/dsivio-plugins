@@ -12,7 +12,7 @@ import { BuildMachine } from "../core/machine.ts";
 import { findCapability, findModule, findProducer } from "../modules/index.ts";
 import { idempotencyKey } from "./ids.ts";
 import { ProjectStore } from "./resources.ts";
-import { ResultsRepository } from "./results.ts";
+import { operationEvidence, ResultsRepository } from "./results.ts";
 import type { ResultManifest } from "./results.ts";
 import { BuildStore } from "./store.ts";
 import type { BuildRecord, Operation } from "./store.ts";
@@ -94,11 +94,7 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
         const value = machine.valueOf(binding.record);
         if (value) Object.defineProperty(manifest.outputs, name, { value: { type: value.type, class: valueClass(value), value: value.data }, enumerable: true, writable: true, configurable: true });
       }
-      manifest.operations = store.operations(build.id).map((op) => ({
-        command: op.command, backend: op.backend,
-        model: op.request !== null && typeof op.request === "object" && !Array.isArray(op.request) && typeof op.request.model === "string" ? op.request.model : null,
-        phase: op.phase, receipt: op.receipt, error: op.error,
-      }));
+      manifest.operations = store.operations(build.id).map((operation) => operationEvidence(build.definition, operation));
       const current = store.read(build.id)!;
       const failure = store.facts(build.id).find((fact) => fact.kind === "failed");
       manifest.outcome = !finalize ? "open" : current.outcome !== "open" ? current.outcome : machine.state === "failed" ? "failed" : current.cancelRequested ? "cancelled" : machine.state === "complete" ? "complete" : "open";
@@ -163,7 +159,7 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
           if (command.kind !== "fulfil") continue;
           let op = store.operations(build.id).find((item) => item.command === command.key);
           if (!op) {
-            op = { build: build.id, command: command.key, phase: "queued", request: command.need.request, backend: null, handle: null, receipt: null, nextWake: 0, progress: null, error: null };
+            op = { build: build.id, command: command.key, phase: "queued", request: command.need.request, summary: {}, backend: null, handle: null, task: null, receipt: null, nextWake: 0, progress: null, error: null };
             if (!store.saveOperation(op, token)) { stopped.abort(); break; }
           }
           if (op.nextWake > Date.now() || (op.phase !== "queued" && op.phase !== "submitted")) continue;
@@ -181,6 +177,7 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
                 if (!resolution.ok) throw new DvError(resolution.code, resolution.reason);
                 if (signal.aborted || store.read(build.id)!.cancelRequested || machine.state !== "running") return;
                 operation.request = resolution.request;
+                operation.summary = resolution.summary;
                 operation.backend = resolution.backend;
                 operation.phase = "submitting";
                 if (!store.beginSubmission(operation, token)) {
@@ -198,6 +195,7 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
                   if (!store.ownsWorker(token)) { stopped.abort(); return; }
                   operation.handle = submitted.handle;
                   operation.receipt = submitted.receipt ?? null;
+                  operation.task = submitted.task ?? null;
                   operation.phase = "submitted";
                   operation.nextWake = Date.now();
                   if (!store.saveOperation(operation, token)) { stopped.abort(); return; }
@@ -206,6 +204,7 @@ export async function runWorker(workspace: BuildWorkspace | string, options: Wor
                 if (capability.executor.kind !== "async" || operation.handle === null) throw new DvError("OPERATION_INVALID", "Submitted operation has no asynchronous task handle");
                 const polled = await capability.executor.poll(operation.handle, ctx);
                 if (!store.ownsWorker(token)) { stopped.abort(); return; }
+                if (polled.receipt !== undefined) operation.receipt = polled.receipt;
                 if (polled.state === "pending") {
                   operation.nextWake = Date.now() + Math.max(0, polled.retryAfterMs);
                   operation.progress = polled.progress ?? null;

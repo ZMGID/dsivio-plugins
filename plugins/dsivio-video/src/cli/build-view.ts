@@ -3,6 +3,7 @@ import { buildView, workerState } from "../build/observe.ts";
 import type { BuildView } from "../build/observe.ts";
 import type { Workspace } from "../source/workspace.ts";
 import type { CliOptions } from "./options.ts";
+import { evidenceLine } from "./result-view.ts";
 
 export function publicBuildView(view: BuildView | null, options: CliOptions) {
   if (!view) return null;
@@ -12,7 +13,7 @@ export function publicBuildView(view: BuildView | null, options: CliOptions) {
 export function buildLines(view: BuildView, options: CliOptions): string[] {
   const lines = [`Build: ${view.id}${view.title ? ` — ${view.title}` : ""}`, `Targets: ${view.targets.join(", ")}`, `Work: ${view.work.state}; result: ${view.result.state}`, `Steps: ${view.work.steps.done}/${view.work.steps.total}`, ...(view.work.state === "done" || ["complete", "failed", "cancelled"].includes(view.result.state) ? [`Needs: ${view.work.needs.done}/${view.work.needs.total}`] : [`Needs completed: ${view.work.needs.done} (${view.work.needs.total} discovered so far)`]), ...view.operationGroups.map((group) => `  ${group.backend ?? "local"}: ${group.phase} (${group.total})${group.progress ? ` — ${group.progress}` : ""}${group.error ? ` — ${group.error}` : ""}`), ...(view.failure ? [`${view.failure.code}: ${view.failure.message}`] : []), ...view.attention.map((hint) => `Attention: ${hint}`)];
   if (options.verbose) {
-    for (const operation of view.operations.slice(0, options.limit)) lines.push(`  operation ${operation.command}: ${operation.phase}; backend ${operation.backend ?? "local"}${operation.progress ? `; ${operation.progress}` : ""}${operation.receipt ? `; receipt ${operation.receipt}` : ""}${operation.error ? `; ${operation.error.code}: ${operation.error.message}` : ""}`);
+    for (const operation of view.operations.slice(0, options.limit)) lines.push(`  ${evidenceLine(operation)}`);
     if (view.operations.length > options.limit) lines.push(`  … ${view.operations.length - options.limit} operations omitted`);
   }
   return lines;

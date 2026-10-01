@@ -129,7 +129,7 @@ test("A submitting operation without a handle is interrupted, never resubmitted"
   const ws = await fixture(t); const id = queue(ws);
   const store = new BuildStore(ws.stateDir);
   store.commitFact(id, { kind: "produced", command: "produce:result", outputs: {}, needs: { value: { capability: "fake/run", request: {} } } });
-  store.saveOperation({ build: id, command: "fulfil:result.value", phase: "submitting", request: {}, backend: "fake", handle: null, receipt: null, nextWake: 0, progress: null, error: null }); store.close();
+  store.saveOperation({ build: id, command: "fulfil:result.value", phase: "submitting", request: {}, summary: {}, backend: "fake", handle: null, task: null, receipt: null, nextWake: 0, progress: null, error: null }); store.close();
   let calls = 0;
   const cap = capability({ kind: "async", submit: async () => { calls++; return { handle: "unexpected" }; }, poll: async () => { throw new Error("unexpected poll"); } });
   await runWorker(ws, { ...fast, registry: registry(cap) });

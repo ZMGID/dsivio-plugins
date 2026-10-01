@@ -23,9 +23,11 @@ export interface Operation {
   command: string;
   phase: "queued" | "submitting" | "submitted" | "done" | "failed";
   request: Json;
+  summary: Record<string, Json>;
   backend: string | null;
   handle: Json | null;
   receipt: string | null;
+  task: string | null;
   nextWake: number;
   progress: string | null;
   error: { code: string; message: string } | null;
@@ -59,7 +61,7 @@ export class BuildStore {
         build TEXT NOT NULL REFERENCES builds(id) ON DELETE CASCADE, command TEXT NOT NULL,
         phase TEXT NOT NULL CHECK(phase IN ('queued','submitting','submitted','done','failed')),
         request TEXT NOT NULL, backend TEXT, handle TEXT, receipt TEXT, next_wake INTEGER NOT NULL,
-        progress TEXT, error TEXT, PRIMARY KEY(build, command)
+        progress TEXT, error TEXT, task TEXT, summary TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(build, command)
       ) STRICT;
       CREATE TABLE IF NOT EXISTS worker_owner (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1), token TEXT NOT NULL, pid INTEGER NOT NULL,
@@ -182,6 +184,7 @@ export class BuildStore {
       build: String(row.build), command: String(row.command), phase: String(row.phase) as Operation["phase"],
       request: JSON.parse(String(row.request)) as Json, backend: row.backend === null ? null : String(row.backend),
       handle: row.handle === null ? null : JSON.parse(String(row.handle)) as Json,
+      task: row.task === null ? null : String(row.task), summary: JSON.parse(String(row.summary)) as Record<string, Json>,
       receipt: row.receipt === null ? null : String(row.receipt), nextWake: Number(row.next_wake),
       progress: row.progress === null ? null : String(row.progress),
       error: row.error === null ? null : JSON.parse(String(row.error)) as Operation["error"],
@@ -192,11 +195,12 @@ export class BuildStore {
     if (ownerToken) this.db.exec("BEGIN IMMEDIATE");
     try {
       if (ownerToken && !this.ownsWorker(ownerToken)) { this.db.exec("COMMIT"); return false; }
-      this.db.prepare(`INSERT INTO operations VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(build,command) DO UPDATE SET
+      this.db.prepare(`INSERT INTO operations(build,command,phase,request,backend,handle,receipt,next_wake,progress,error,task,summary) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(build,command) DO UPDATE SET
         phase=excluded.phase,request=excluded.request,backend=excluded.backend,handle=excluded.handle,
-        receipt=excluded.receipt,next_wake=excluded.next_wake,progress=excluded.progress,error=excluded.error`).run(
+        receipt=excluded.receipt,next_wake=excluded.next_wake,progress=excluded.progress,error=excluded.error,
+        task=excluded.task,summary=excluded.summary`).run(
         op.build, op.command, op.phase, JSON.stringify(op.request), op.backend, op.handle === null ? null : JSON.stringify(op.handle),
-        op.receipt, op.nextWake, op.progress, op.error === null ? null : JSON.stringify(op.error));
+        op.receipt, op.nextWake, op.progress, op.error === null ? null : JSON.stringify(op.error), op.task, JSON.stringify(op.summary));
       if (ownerToken) this.db.exec("COMMIT");
       return true;
     } catch (error) {

@@ -1,9 +1,8 @@
 import { BuildStore, WORKER_LEASE_MS } from "./store.ts";
-import { ResultsRepository } from "./results.ts";
+import { operationEvidence, ResultsRepository } from "./results.ts";
 import { workerWorkspace } from "./worker.ts";
 import type { BuildWorkspace } from "./worker.ts";
-import type { ResultManifest } from "./results.ts";
-import type { Operation } from "./store.ts";
+import type { OperationEvidence, ResultManifest } from "./results.ts";
 import type { Fact } from "../core/graph.ts";
 import { DvError } from "../core/errors.ts";
 import { BuildMachine } from "../core/machine.ts";
@@ -14,7 +13,7 @@ export interface BuildView {
   targets: string[];
   work: { state: "unknown" | "submitting" | "working" | "done"; outcome: ResultManifest["outcome"]; stopReason: string | null; cancelRequested: boolean; needs: { total: number; done: number }; steps: { total: number; done: number } };
   result: { state: "missing" | "unavailable" | ResultManifest["outcome"]; outputTotal: number };
-  operations: Operation[];
+  operations: OperationEvidence[];
   operationGroups: { backend: string | null; phase: string; progress: string | null; error: string | null; total: number }[];
   attention: string[];
   remoteCancellation: string;
@@ -79,7 +78,7 @@ export async function buildView(buildId: string, workspace: BuildWorkspace | str
       work: { state: build?.state === "staged" ? "submitting" : build?.state ?? "unknown", outcome: failure ? "failed" : build?.outcome ?? result?.outcome ?? "open", stopReason: build?.stopReason ?? null, cancelRequested: build?.cancelRequested ?? false,
         needs: { total: needTotal, done: facts.filter((fact) => fact.kind === "fulfilled").length }, steps: { total: stepTotal, done: stepDone } },
       result: { state: unavailable ? "unavailable" : result?.outcome ?? "missing", outputTotal: result ? Object.keys(result.outputs).length : 0 },
-      operations, operationGroups: groups, attention,
+      operations: build ? operations.map((operation) => operationEvidence(build.definition, operation)) : result?.operations ?? [], operationGroups: groups, attention,
       remoteCancellation: "Remote tasks cannot be cancelled by this runtime. Local cancellation does not stop remote tasks or imply a refund.",
       failure: result?.failure ?? (failure ? { code: failure.code, message: failure.message } : null),
     };

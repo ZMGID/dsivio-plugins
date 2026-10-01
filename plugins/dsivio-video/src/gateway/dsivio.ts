@@ -97,7 +97,7 @@ export function dsivioExecutor(kind: MediaKind): AsyncExecutor {
       // A task identity is recoverable even when submission exits uncertain or timed out.
       // Preserve it so the worker queries that task instead of creating another paid call.
       if (reply && typeof reply.id === "string" && reply.id && reply.kind === kind) {
-        return { handle: { taskId: reply.id, kind }, ...(typeof reply.remoteId === "string" ? { receipt: reply.remoteId } : {}) };
+        return { handle: { taskId: reply.id, kind }, task: reply.id, ...(typeof reply.remoteId === "string" ? { receipt: reply.remoteId } : {}) };
       }
       if (result.code === 2 || result.code === 3) throw new DvError("GATEWAY_REJECTED", `Dsivio rejected the request without charge: ${result.stderr || result.stdout}`);
       if (result.code === 6) throw new DvError("GATEWAY_UNAVAILABLE", "Dsivio is closed; open Dsivio and retry with the same idempotency key");
@@ -109,13 +109,14 @@ export function dsivioExecutor(kind: MediaKind): AsyncExecutor {
       if (result.code === 6) return { state: "pending", retryAfterMs, progress: "Dsivio is closed; open Dsivio to continue checking this task" };
       const reply = parseReply(result.stdout);
       if (reply.id !== handle.taskId || reply.kind !== kind) throw new DvError("GATEWAY_RESPONSE_INVALID", "Dsivio status returned a different task");
-      if (reply.status === "running") return { state: "pending", retryAfterMs, ...(typeof reply.error === "string" ? { progress: reply.error } : {}) };
-      if (reply.status === "failed") return { state: "failed", code: "GATEWAY_FAILED", message: typeof reply.error === "string" ? reply.error : "Dsivio generation failed", charged: result.code !== 5 && reply.submissionState !== "uncertain" && (reply.submissionState === "rejected" || result.code === 3) ? "no" : "maybe" };
+      const evidence = typeof reply.remoteId === "string" ? { receipt: reply.remoteId } : {};
+      if (reply.status === "running") return { state: "pending", retryAfterMs, ...evidence, ...(typeof reply.error === "string" ? { progress: reply.error } : {}) };
+      if (reply.status === "failed") return { state: "failed", code: "GATEWAY_FAILED", message: typeof reply.error === "string" ? reply.error : "Dsivio generation failed", charged: result.code !== 5 && reply.submissionState !== "uncertain" && (reply.submissionState === "rejected" || result.code === 3) ? "no" : "maybe", ...evidence };
       if (result.code !== 0 || reply.status !== "succeeded" || !Array.isArray(reply.outputs)) throw new DvError("GATEWAY_RESPONSE_INVALID", `Invalid Dsivio task status (exit ${result.code})`);
       const output = reply.outputs.find((item) => object(item) && typeof item.path === "string" && typeof item.mime === "string" && item.mime.startsWith(`${kind}/`));
       if (!output || !object(output) || typeof output.path !== "string" || typeof output.mime !== "string") throw new DvError("GATEWAY_OUTPUT_MISSING", `Dsivio succeeded without a ${kind} output`);
       const resource = await ctx.store.putFile(output.path, output.mime);
-      return { state: "done", value: { type: kind === "image" ? imageType : videoType, data: { ...resource } } };
+      return { state: "done", value: { type: kind === "image" ? imageType : videoType, data: { ...resource } }, ...evidence };
     },
   };
 }

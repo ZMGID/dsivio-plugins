@@ -76,6 +76,7 @@ src/
 - `runWorker(workspace, options)`：`dsivio-video _worker` 的实现；空闲 `DSIVIO_VIDEO_WORKER_IDLE_MS`（默认 30000）毫秒后退出。
 - 重启语义：已拿到远程任务句柄的操作在 Worker 重启后继续查询（同一幂等 key）；停在「提交中」且没有句柄的操作记为 `SUBMISSION_INTERRUPTED`，绝不重新提交；Dsivio 未运行（`GATEWAY_UNAVAILABLE`）时操作保持排队，稍后用同一幂等 key 再提交。远程任务无法取消，`cancel` 只停止本地后续工作。
 - `ResultsRepository`：`list`、`history(outputName)`、`read(buildId)`、`exportOutput(buildId, output, to)`；同时实现 `HistoryReader`。
+- 付费证据：结果清单的 `operations` 每项为 `{ outputs, backend, model, task, receipt, phase, progress, error, summary }`。`task` 是 Dsivio 任务 id（提交时拿到），`receipt` 是供应商回执（查询时拿到后更新），`summary` 是实际发出的关键参数。`inspect --verbose` 每项一行，可据此在 Dsivio 或供应商处核对。
 - 幂等 key：`${buildId}:${sha256(commandKey) 前 24 位}`。
 
 **cli**：`check`、`vocabulary [--models]`、`plan`、`build [--follow]`、`status [--watch]`、`activity`、`builds`、`history`、`inspect`、`get`、`cancel`、`runtime up|down|status|logs`、`paths`、`version`、`doctor`。每个命令支持 `--json`；错误统一 `{ ok: false, error: { code, message, source, hint } }`；退出码 1 为命令失败、2 为用法错误。没有 Runtime Profile，`runtime` 子命令只管理本项目的 Worker。

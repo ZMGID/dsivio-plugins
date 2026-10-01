@@ -42,10 +42,11 @@ export interface ExecuteContext {
   log(message: string): void;
 }
 
+/** `receipt` is the provider's task id once known (it often appears only after submission is accepted). */
 export type PollResult =
-  | { state: "pending"; retryAfterMs: number; progress?: string }
-  | { state: "done"; value: Value }
-  | { state: "failed"; code: string; message: string; charged: "no" | "maybe" };
+  | { state: "pending"; retryAfterMs: number; progress?: string; receipt?: string }
+  | { state: "done"; value: Value; receipt?: string }
+  | { state: "failed"; code: string; message: string; charged: "no" | "maybe"; receipt?: string };
 
 export interface ImmediateExecutor {
   kind: "immediate";
@@ -55,7 +56,8 @@ export interface ImmediateExecutor {
 export interface AsyncExecutor {
   kind: "async";
   /** Submit once. `handle` must let `poll` find the same remote task after a worker restart. */
-  submit(request: Json, ctx: ExecuteContext): Promise<{ handle: Json; receipt?: string }>;
+  /** `task` identifies the executor's public task; `receipt` identifies the underlying provider's task. */
+  submit(request: Json, ctx: ExecuteContext): Promise<{ handle: Json; task?: string; receipt?: string }>;
   /** Query only; never resubmits. On success it stores outputs in ctx.store and returns the typed value. */
   poll(handle: Json, ctx: ExecuteContext): Promise<PollResult>;
   cancel?(handle: Json, ctx: ExecuteContext): Promise<"confirmed" | "requested" | "unsupported" | "too-late">;
