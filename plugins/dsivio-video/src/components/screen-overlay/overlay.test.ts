@@ -18,6 +18,7 @@ import { lowerOverlay } from "./lower.ts";
 import { assembleOverlayProgram } from "./program.ts";
 import { parseOverlayOptions, validateOverlayProgram } from "./validate.ts";
 import type { OverlayAuthorPlan } from "./types.ts";
+import { createBokehGeometry } from "./runtime.ts";
 
 const canvas: Canvas = { canvasKey: "canvas", extent: { widthPx: 640, heightPx: 360 } };
 const timeline: Timeline = { axisKey: "axis", clock: { fps: { numerator: 30, denominator: 1 } }, totalFrames: 60, placements: [] };
@@ -84,4 +85,18 @@ test("independent overlapping effects retain lifetime and stacking without suppr
   assert.throws(() => assembleOverlayProgram("overlay", canvas, timeline, plan, windows.slice(0, 1)), { code: "OVERLAY_INPUT" });
   assert.throws(() => validateOverlayProgram({ ...resolved, timeline: { ...timeline, axisKey: "other" } }), { code: "OVERLAY_WINDOW" });
   assert.throws(() => validateOverlayProgram({ ...resolved, effects: [{ ...resolved.effects[0]!, effectKey: "other" }] }), { code: "OVERLAY_WINDOW" });
+});
+
+test("Bokeh generated geometry keeps one highlight at zero amount and scales to 48", () => {
+  const options = { amount: 0, "min-size": 20, "max-size": 100, color: "#ffffff", warmth: 0, drift: 0, seed: 0 };
+  for (const [amount, count] of [[0, 1], [0.01, 1], [0.5, 24], [1, 48]]) {
+    const geometry = createBokehGeometry(640, 360, { ...options, amount: amount! }, () => 0.5);
+    assert.equal(geometry.length, count);
+    assert.deepEqual(geometry[0], { x: 320, y: 180, radius: 30, alpha: 0.275, velocity: 0 });
+  }
+  const lower = createBokehGeometry(640, 360, options, () => 0);
+  const upper = createBokehGeometry(640, 360, options, () => 1 - Number.EPSILON);
+  assert.equal(lower[0]!.radius, options["min-size"] / 2);
+  assert.ok(upper[0]!.radius <= options["max-size"] / 2);
+  assert.ok(upper[0]!.x < 640 && upper[0]!.y < 360);
 });

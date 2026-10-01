@@ -1,5 +1,3 @@
-状态：按第 3 阶段设计编写，实现合并后需核对 vocabulary
-
 # 在同一个整数帧时钟上组织时间
 
 装配已接受媒体、安排语义事件或纯动画时读。制作贡献归 [tracks](tracks.md)，终端装配归 [film](film.md)。
@@ -40,6 +38,8 @@ content.end 是最大结束位置，不是最后声明的 Take 结束。显式 e
 
 ## 让语义决定位置，让时钟决定展开
 
-时间单位用 f/ms/s，不用裸数。语义定位使用 program.start/end、segment.start/end、selection.start/end、moment.cue；只允许加减一个带单位时长。窗口采用 during、at+for、until+for、start+end 中恰一种，不混用。量化后窗口必须非空且在节目内，不静默夹到边界。
+时间单位用 f/ms/s，不用裸数。语义定位使用 program.start/end、segment.start/end、selection.start/end、moment.cue；只允许加减一个带单位时长。窗口 W 采用 `during="program"` 或 Segment/Selection、`at`+`for`、`until`+`for`、`start`+`end` 中恰一种；支持共享 Window 的组件也可只写 `window={shared}`。语义边表达式须给实际使用的 `selection`/`segment`/`moment` 或 `start-source`/`end-source` 引用，不保留无用绑定。量化后窗口必须非空且在节目内，不静默夹到边界。
+
+`time:Window` 必填 id/timeline 及显式 W，公开裸 id。`time:Instant` 必填 id/timeline，使用 at（Segment/Selection 必须给 boundary=start/end）或 instant 表达式及使用的绑定；公开裸 id。W 是半开区间，端点按精确有理数运算后 half-up 量化；Take 放置则必须本来就落在整数帧。组件的 `at` 是节目轴，Trim 是源局部轴，动画 keyframe 是组件局部帧，不混用。
 
 源参考秒数定位分析证据；目标事件依据目标台词或目标动作重建。恢复、snapshot 或区间渲染直接寻帧必须得到相同状态，不依赖从第一帧播放积累。

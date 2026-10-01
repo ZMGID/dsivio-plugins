@@ -5,7 +5,7 @@ import { lowerMediaVisual, lowerMediaAudio } from "./lower.ts";
 import { visualSampling } from "./source.ts";
 import { parseMotion, motionKeyframes } from "./motion.ts";
 import { parseAppearance } from "./appearance.ts";
-import { validateVisualTrack, validateAudioTrack } from "../../render/validate.ts";
+import { validateVisualTrack, validateAudioTrack, sampleFrame } from "../../render/validate.ts";
 import { composeComposition } from "../../render/composition.ts";
 import type { MediaInputs, MediaPlan, MediaPlayback } from "./types.ts";
 import type { Timeline, SynchronizedMedia } from "../../timeline/types.ts";
@@ -14,7 +14,7 @@ const canvas = { canvasKey: "canvas", extent: { widthPx: 320, heightPx: 180 } },
 const media: SynchronizedMedia = { clock: timeline.clock, totalFrames: 90, picture: { resource: { $resource: "picture", bytes: 100, mime: "video/mp4" }, extent: { widthPx: 100, heightPx: 100 }, alpha: "opaque" }, sound: { resource: { $resource: "sound", bytes: 100, mime: "audio/wav" }, totalSamples: 144000 } };
 function setup(audio = true): { plan: MediaPlan; inputs: MediaInputs } {
   const properties = { "stack-order": 4, "frame-paint": "#222222", padding: "10", "border-width": 2, "border-color": "#FFFFFF" };
-  const units = [0, 30].map((at, i) => ({ id: `member${i}`, instant: { kind: "at" as const, source: `${at}f` as `${number}f` }, audioGain: 1, ...(audio ? { sourceAudio: "content" } : {}), layers: [{ id: "content", kind: "media" as const, sourceIndex: i, properties, sampling: [] }] }));
+  const units = [0, 30].map((at, i) => ({ id: `member${i}`, sourceForm: "direct" as const, instant: { kind: "at" as const, source: `${at}f` as `${number}f` }, audioGain: 1, ...(audio ? { sourceAudio: "content" } : {}), layers: [{ id: "content", kind: "media" as const, sourceIndex: i, properties, sampling: [] }] }));
   return { plan: { trackKey: "track", hasAudio: audio, groups: [{ id: "sequence", frameIndex: 0, properties, motion: parseMotion({ enter: "fade", "enter-frames": 6, exit: "slide", "exit-frames": 6, "exit-direction": "right" }), until: { kind: "at", source: "60f" }, units, handoffs: [{ id: "swap", from: "member0", operator: "crossfade", duration: 10, ratio: .4, audio: audio ? "crossfade" : "cut" }], sounds: [] }] }, inputs: { frames: [frame], images: [], media: [media, media], surfaces: [], extents: [], clips: [], windows: [] } };
 }
 function sampled(mode: MediaPlayback, f: number, sourceLength = 4, targetLength = 7): number | null {
@@ -67,4 +67,35 @@ test("outside-canvas motion moves the complete frame and rejects impossible orig
   const keys = motionKeyframes(m, { start: 0, end: 12 }, frame.rect, canvas); assert.match(keys[0]!.declarations.find(d => d.property === "transform")!.value, /translate\(280px/);
   assert.throws(() => parseMotion({ enter: "slide", "enter-frames": 6, "enter-direction": "right", "enter-origin": "outside-canvas", "enter-amount": 20 }), /without amount/);
   assert.throws(() => parseMotion({ sustain: "drift 12 2" }), /direction/);
+});
+
+test("audio cut masks one shared Member playback clock without resetting native or stretch phase", () => {
+  for (const mode of ["once-start", "stretch"] as const) {
+    const { plan, inputs } = setup();
+    plan.groups[0]!.handoffs[0]!.audio = "cut";
+    for (const unit of plan.groups[0]!.units) unit.layers[0]!.properties = { ...unit.layers[0]!.properties, playback: mode };
+    const program = assembleMediaProgram(timeline, canvas, plan, inputs), visual = lowerMediaVisual(program), audio = lowerMediaAudio(program);
+    const film = composeComposition("synced", canvas, timeline, { background: "#000000" }, [visual], [audio]);
+    const video = film.visualTracks[0]!.presents[0]!.nodes.filter(n => n.kind === "video")[1]!;
+    const clip = film.audioTracks[0]!.clips[1]!;
+    assert.equal(sampleFrame(video.sampling!, 30), mode === "stretch" ? 10 : 4);
+    assert.equal(clip.targetSamples.start, 41600);
+    assert.deepEqual(clip.audible, [{ start: 48000, end: 96000 }]);
+    assert.deepEqual(clip.speed, mode === "stretch" ? { numerator: 90, denominator: 34 } : { numerator: 1, denominator: 1 });
+    const sourceAtBoundary = clip.sourceSamples.start + (48000 - clip.targetSamples.start) * clip.speed.numerator / clip.speed.denominator;
+    assert.equal(Math.floor(sourceAtBoundary / 1600), mode === "stretch" ? 10 : 4);
+  }
+});
+
+test("a Layer named content remains layer form and cannot acquire outer-frame recipe keys", () => {
+  const { plan, inputs } = setup(false), unit = plan.groups[0]!.units[0]!;
+  unit.sourceForm = "layers";
+  unit.layers[0]!.properties = { fit: "native" };
+  const program = assembleMediaProgram(timeline, canvas, plan, inputs);
+  const visual = lowerMediaVisual(program);
+  const film = composeComposition("layer", canvas, timeline, { background: "#000000" }, [visual], []);
+  const source = film.visualTracks[0]!.presents[0]!.nodes.find(n => n.kind === "video")!;
+  assert.equal(source.style.find(s => s.property === "width")!.value, "100px");
+  unit.layers[0]!.properties = { fit: "native", "stack-order": 0 };
+  assert.throws(() => assembleMediaProgram(timeline, canvas, plan, inputs), { code: "MEDIA_APPEARANCE" });
 });

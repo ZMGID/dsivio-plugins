@@ -7,6 +7,17 @@ import { lowerStickers, STICKER_MOTION_SETUP } from "./lower.ts";
 import { assembleStickerProgram } from "./program.ts";
 import type { StickerStyle } from "./types.ts";
 import type { Timeline } from "../../timeline/types.ts";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import puppeteer from "puppeteer-core";
+import { DvError } from "../../core/errors.ts";
+import { ProjectStore } from "../../build/resources.ts";
+import { localCapabilities } from "../../fonts/capabilities.ts";
+import { validateFontFace } from "../../fonts/validate.ts";
+import { locateBrowser } from "../../render/browser.ts";
+import { compileDocument } from "../../render/document.ts";
+import { composeComposition } from "../../render/composition.ts";
 const timeline: Timeline = { axisKey: "a", clock: { fps: { numerator: 30, denominator: 1 } }, totalFrames: 120, placements: [] };
 const canvas = { canvasKey: "c", extent: { widthPx: 720, heightPx: 1280 } };
 const style: StickerStyle = { styleKey: "s", properties: resolveProperties({}, stickerRules), fonts: { stackKey: "fonts", faces: [700, 900].map(weight => ({ faceKey: `inter-${weight}`, family: "inter", weight, style: "normal" as const, shards: [{ resource: { $resource: `font-${weight}`, bytes: 100, mime: "font/woff2" }, unicodeRange: "U+0-10FFFF" }], license: { spdx: "OFL-1.1", notice: { $resource: "license", bytes: 100, mime: "text/plain" } } })) } };
@@ -33,4 +44,54 @@ test("pop, hold and exit are deterministic under out-of-order seeks and short wi
   draw(0); assert.equal(target.style.opacity, "0"); assert.match(target.style.transform, /scale\(0.78\)/);
   draw(50); const middle = { ...target.style }; draw(119); assert.ok(Number(target.style.opacity) < 0.1); draw(50); assert.deepEqual(target.style, middle);
   const short = new Function("root", "data", STICKER_MOTION_SETUP)({ parentElement: target }, { properties: style.properties, frames: 3 }); short(1); assert.ok(Number.isFinite(Number(target.style.opacity))); assert.doesNotMatch(target.style.transform, /NaN|Infinity/);
+});
+test("disabled entry reserves no frames before a short-window exit", () => {
+  const properties = resolveProperties({ enter: "none", exit: "fade-up", "exit-frames": 5, "exit-easing": "linear", hold: "none" }, stickerRules);
+  const target = { style: { opacity: "", transform: "" } };
+  const draw = new Function("root", "data", STICKER_MOTION_SETUP)({ parentElement: target }, { properties, frames: 10 });
+  draw(0); assert.equal(Number(target.style.opacity), 1);
+  draw(5); assert.equal(Number(target.style.opacity), 1);
+  draw(9); assert.ok(Math.abs(Number(target.style.opacity) - 0.2) < 1e-12); assert.ok(Math.abs(Number(/translateY\(([^p]+)px\)/.exec(target.style.transform)![1]) + 22.4) < 1e-12);
+  draw(0); assert.equal(Number(target.style.opacity), 1);
+});
+test("disabled entry and exit allow hold motion over the whole short window", () => {
+  const properties = resolveProperties({ enter: "none", exit: "none", hold: "float", "hold-period-frames": 4, "hold-amplitude-y": 4, "hold-rotation-amplitude": 0 }, stickerRules);
+  const target = { style: { opacity: "", transform: "" } };
+  const draw = new Function("root", "data", STICKER_MOTION_SETUP)({ parentElement: target }, { properties, frames: 10 });
+  draw(1); assert.equal(target.style.opacity, "1"); assert.match(target.style.transform, /translateY\(4px\)/);
+  draw(3); assert.match(target.style.transform, /translateY\(-4px\)/);
+  draw(1); assert.match(target.style.transform, /translateY\(4px\)/);
+});
+test("real short card exits despite disabled entry's default frame count", async t => {
+  let location;
+  try { location = await locateBrowser("render"); }
+  catch (error) { if (error instanceof DvError && error.code === "BROWSER_NOT_PREPARED") { t.skip("Requires explicit setup browser --kind render"); return; } throw error; }
+  const directory = await mkdtemp(join(tmpdir(), "dv-sticker-motion-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const store = new ProjectStore(directory), executor = localCapabilities[0]!.executor;
+  if (executor.kind !== "immediate") throw new DvError("STICKER_TEST", "Expected immediate font executor.");
+  let faceData;
+  try {
+    const value = await executor.run({ faceKey: "motion-inter", family: "inter", weight: 700, style: "normal" }, { projectRoot: directory, buildId: "test", commandKey: "font", idempotencyKey: "font", workDir: directory, store, signal: new AbortController().signal, log() {} });
+    faceData = value.data; validateFontFace(faceData);
+  } catch (error) { if (error instanceof DvError && error.code === "FONT_NOT_PREPARED") { t.skip("Requires explicit setup fonts"); return; } throw error; }
+  const source = program("@alex");
+  const properties = resolveProperties({ enter: "none", exit: "fade-up", "exit-frames": 5, "exit-easing": "linear", hold: "none" }, stickerRules);
+  const p = { ...source, stickers: source.stickers.map(item => ({ ...item, window: projectWindow(timeline, { kind: "at", source: "0f", duration: "10f" }, item.itemKey), style: { ...style, properties, fonts: { stackKey: "motion-fonts", faces: [faceData] } } })) };
+  const document = compileDocument(composeComposition("motion-proof", canvas, timeline, { background: "#102030" }, [lowerStickers(p)], []));
+  let html = document.html;
+  for (const usage of document.resources) html = html.replaceAll(`dv-resource://${usage.resource.$resource}`, `data:${usage.resource.mime};base64,${(await readFile(store.pathOf(usage.resource))).toString("base64")}`);
+  const browser = await puppeteer.launch({ executablePath: location.path, headless: true, args: ["--no-sandbox"] });
+  t.after(() => browser.close());
+  const page = await browser.newPage(); await page.setViewport({ width: 720, height: 1280 }); await page.setContent(html, { waitUntil: "load" }); await page.evaluate("window.__dvReady");
+  await page.evaluate("window.__dvSeekFrame(0)");
+  assert.equal(await page.evaluate("Number(getComputedStyle(document.querySelector('[data-dv-node=\"item\"]')).opacity)"), 1);
+  await page.evaluate("window.__dvSeekFrame(9)");
+  const endPose = await page.evaluate("(()=>{const s=getComputedStyle(document.querySelector('[data-dv-node=\"item\"]'));return [Number(s.opacity),new DOMMatrix(s.transform).m42]})()");
+  assert.ok(Array.isArray(endPose));
+  assert.ok(Math.abs(endPose[0] - 0.2) < 1e-6); assert.ok(Math.abs(endPose[1] + 22.4) < 1e-6);
+  await page.evaluate("window.__dvSeekFrame(10)");
+  assert.equal(await page.evaluate("getComputedStyle(document.querySelector('[data-dv-node=\"item\"]')).visibility"), "hidden");
+  await page.evaluate("window.__dvSeekFrame(0)");
+  assert.equal(await page.evaluate("Number(getComputedStyle(document.querySelector('[data-dv-node=\"item\"]')).opacity)"), 1);
 });

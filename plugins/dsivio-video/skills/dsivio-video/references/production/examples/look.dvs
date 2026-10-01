@@ -1,0 +1,5 @@
+<?dvml using="dsivio-video/dvs@1"?>
+<sheet version="1">
+film.base { background: "#102030"; }
+typo.title { stack-order: 20; size: 46; fill: "#FFFFFF"; align: center; block-align: center; wrap: word; }
+</sheet>

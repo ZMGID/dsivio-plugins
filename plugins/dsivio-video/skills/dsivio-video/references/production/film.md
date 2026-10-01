@@ -1,5 +1,3 @@
-状态：按第 3 阶段设计编写，实现合并后需核对 vocabulary
-
 # 显式装配一部 Film
 
 轨道完成后、背景/层级异常或装配纯动画时读。Film 汇总公共轨道，不拥有各组件私有 Style。
@@ -27,7 +25,7 @@ typo.title { stack-order: 20; size: 64; fill: "#FFFFFF"; align: center; wrap: wo
 </sheet>
 ```
 
-这些键来自第 3 阶段 canonical 设计。其他外观键先查合并后的 vocabulary，不从 CSS 随意移植。这里的 Film 公开 `.composition`，不是 `.video`。
+这些键已对照 film、performance、typo 的真实 vocabulary 与 Recipe 解码实现核实；不从 CSS 随意移植属性。这里的 Film 公开 `.composition`，不是 `.video`。
 
 ## 查归属而非盲目换声明顺序
 

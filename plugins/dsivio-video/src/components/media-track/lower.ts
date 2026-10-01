@@ -64,7 +64,13 @@ export function lowerMediaVisual(program: MediaProgram): VisualTrack {
         const fitted = fitContent(inner, extent, style.fit), length = u.visual.end - u.visual.start;
         const samplingKeys: Keyframe[] = layer.plan.sampling.map(s => ({ offsetFrames: u.visual.start - g.lifetime.start + Math.round(s.at * length), easing: s.easing ?? "linear", declarations: [{ property: "transform", value: `translate(${s.x}px, ${s.y}px) rotate(${s.rotate}deg) scale(${s.zoom})` }] }));
         if (samplingKeys.some((s, i) => i > 0 && s.offsetFrames <= samplingKeys[i - 1]!.offsetFrames)) throw new DvError("MEDIA_SAMPLING", "Sampling positions collapse to duplicate frame boundaries.");
-        const base = { nodeKey, parentKey: key, order: nodes.length, style: [...geometry({ ...fitted, xPx: fitted.xPx - rect.xPx - border, yPx: fitted.yPx - rect.yPx - border }), ...style.outerStyle.filter(s => s.property === "filter" || s.property === "opacity")], keyframes: samplingKeys, attributes: [] };
+        let parentKey = key, localRect = { ...fitted, xPx: fitted.xPx - rect.xPx - border, yPx: fitted.yPx - rect.yPx - border };
+        if (samplingKeys.length) {
+          parentKey = `${nodeKey}/sampling`;
+          nodes.push({ kind: "box", nodeKey: parentKey, parentKey: key, order: nodes.length, style: geometry(localRect), keyframes: samplingKeys, attributes: [] });
+          localRect = { ...fitted, xPx: 0, yPx: 0 };
+        }
+        const base = { nodeKey, parentKey, order: nodes.length, style: [...geometry(localRect), ...style.outerStyle.filter(s => s.property === "filter" || s.property === "opacity")], keyframes: [], attributes: [] };
         if (source.kind === "image") nodes.push({ ...base, kind: "image", resource: source.resource });
         else { const timing = source.kind === "media" ? source.media : source.surface.timing.kind === "frames" ? source.surface.timing : undefined; const sampling = timing ? visualSampling(timing.clock, timing.totalFrames, style.trim ?? { start: 0, end: timing.totalFrames }, style.playback, u.visual, u.visual) : undefined; if (sampling) for (const piece of sampling.pieces) { piece.target.start += u.visual.start - g.lifetime.start; piece.target.end += u.visual.start - g.lifetime.start; } if (source.kind === "media") nodes.push({ ...base, kind: "video", resource: source.media.picture!.resource, sampling: sampling! }); else nodes.push({ ...base, kind: "surface", surface: source.surface, ...(sampling ? { sampling } : {}) }); }
       }
@@ -86,8 +92,15 @@ export function lowerMediaAudio(program: MediaProgram): AudioTrack {
       const trim = a.trim ?? { start: 0, end: source.media.totalFrames };
       const mode = a.playback === "hold-start" ? "once-start" : a.playback === "hold-end" ? "once-end" : a.playback;
       const key = `${g.plan.id}/${u.plan.id}/audio`;
-      const window = projectWindow(program.timeline, { kind: "edges", start: `${target.start}f`, end: `${target.end}f` }, key);
-      const lowered = lowerAudio({ trackKey: program.trackKey, timeline: program.timeline, items: [{ source: source.media, window, plan: { itemKey: key, sourceIndex: 0, windowIndex: 0, playback: mode, gain: u.plan.audioGain, trimStart: `${trim.start}f`, trimEnd: `${trim.end}f`, fadeIn: "0f", fadeOut: "0f", ...(mode === "stretch" ? { minRate: Number.MIN_VALUE, maxRate: 100 } : {}) } }] }).clips[0]!;
+      const window = projectWindow(program.timeline, { kind: "edges", start: `${u.visual.start}f`, end: `${u.visual.end}f` }, key);
+      let lowered: AudioClip;
+      if (mode === "stretch") {
+        // The common frame-rate ratio governs both picture sampling and pitch-preserving sound.
+        const sourceStart = frameToSample48k(trim.start, source.media.clock), sourceEnd = frameToSample48k(trim.end, source.media.clock);
+        lowered = { clipKey: key, source: source.media.sound.resource, sourceTotalSamples: source.media.sound.totalSamples, sourceSamples: { start: sourceStart, end: sourceEnd }, targetSamples: { start: frameToSample48k(u.visual.start, clock), end: frameToSample48k(u.visual.end, clock) }, speed: { numerator: trim.end - trim.start, denominator: u.visual.end - u.visual.start }, preservePitch: true, gain: u.plan.audioGain, fadeInSamples: 0, fadeOutSamples: 0, gainCurve: [] };
+      } else lowered = lowerAudio({ trackKey: program.trackKey, timeline: program.timeline, items: [{ source: source.media, window, plan: { itemKey: key, sourceIndex: 0, windowIndex: 0, playback: mode, gain: u.plan.audioGain, trimStart: `${trim.start}f`, trimEnd: `${trim.end}f`, fadeIn: "0f", fadeOut: "0f" } }] }).clips[0]!;
+      const audible = { start: Math.max(lowered.targetSamples.start, frameToSample48k(target.start, clock)), end: Math.min(lowered.targetSamples.end, frameToSample48k(target.end, clock)) };
+      if (audible.start !== lowered.targetSamples.start || audible.end !== lowered.targetSamples.end) lowered.audible = audible.end > audible.start ? [audible] : [];
       const curve = new Map<number, number>(); curve.set(lowered.targetSamples.start, 1); curve.set(lowered.targetSamples.end, 1);
       for (const [h, enter] of [[incoming, true], [outgoing, false]] as const) if (h?.plan.audio === "crossfade") { const hs = frameToSample48k(h.frames.start, clock), he = frameToSample48k(h.frames.end, clock); const start = Math.max(hs, lowered.targetSamples.start), end = Math.min(he, lowered.targetSamples.end); if (end > start) { curve.set(start, enter ? (start - hs) / (he - hs) : 1 - (start - hs) / (he - hs)); curve.set(end, enter ? (end - hs) / (he - hs) : 1 - (end - hs) / (he - hs)); } }
       lowered.gainCurve = [...curve].sort((a, b) => a[0] - b[0]).map(([sample, gain]) => ({ sample, gain })); clips.push(lowered);

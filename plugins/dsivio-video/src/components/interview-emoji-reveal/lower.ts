@@ -10,7 +10,7 @@ const icon=container.querySelector('[data-emoji="answer"]');
 const points=data.points;
 return frame=>{
  const active=data.activation===null||frame>=data.activation;
- placeholder.style.visibility=active?'hidden':'visible';icon.style.visibility=active?'visible':'hidden';
+ placeholder.style.visibility=active?'hidden':'inherit';icon.style.visibility=active?'inherit':'hidden';
  let scale=1;
  if(active&&data.activation!==null){scale=points[points.length-1].scale;for(let i=0;i<points.length-1;i++){const a=points[i],b=points[i+1];if(frame<b.frame){const p=Math.max(0,Math.min(1,(frame-a.frame)/Math.max(1,b.frame-a.frame)));scale=a.scale+(b.scale-a.scale)*p;break;}}}
  icon.style.transform='scale('+scale+')';
@@ -19,7 +19,8 @@ export function lowerEmojiReveal(program: EmojiProgram): VisualTrack {
   validateEmojiProgram(program); const p = program.style.properties, key = program.trackKey; const nodes: VisualNode[] = [];
   const slot = n(p, "slot-size"), gap = n(p, "slot-gap"), px = n(p, "padding-x"), py = n(p, "padding-y"), size = n(p, "icon-size");
   const rect = emojiStripRect(program.canvas, p, program.items.length);
-  nodes.push({ kind: "box", nodeKey: key, parentKey: null, order: 0, attributes: [], keyframes: [], style: [{ property: "position", value: "absolute" }, { property: "left", value: `${rect.xPx}px` }, { property: "top", value: `${rect.yPx}px` }, { property: "width", value: `${rect.widthPx}px` }, { property: "height", value: `${rect.heightPx}px` }, { property: "box-sizing", value: "border-box" }, { property: "background-color", value: t(p, "background") }, { property: "border", value: `${n(p, "border-width")}px solid ${t(p, "border-color")}` }, { property: "border-radius", value: `${n(p, "radius")}px` }, { property: "box-shadow", value: `${n(p, "shadow-x")}px ${n(p, "shadow-y")}px ${n(p, "shadow-blur")}px ${n(p, "shadow-spread")}px ${t(p, "shadow-color")}` }] });
+  nodes.push({ kind: "box", nodeKey: key, parentKey: null, order: 0, attributes: [], keyframes: [], style: [{ property: "position", value: "absolute" }, { property: "left", value: `${rect.xPx}px` }, { property: "top", value: `${rect.yPx}px` }, { property: "width", value: `${rect.widthPx}px` }, { property: "height", value: `${rect.heightPx}px` }] });
+  nodes.push({ kind: "box", nodeKey: `${key}/board`, parentKey: key, order: 1, attributes: [], keyframes: [], style: [{ property: "position", value: "absolute" }, { property: "left", value: "0px" }, { property: "top", value: "0px" }, { property: "width", value: "100%" }, { property: "height", value: "100%" }, { property: "box-sizing", value: "border-box" }, { property: "background-color", value: t(p, "background") }, { property: "border", value: `${n(p, "border-width")}px solid ${t(p, "border-color")}` }, { property: "border-radius", value: `${n(p, "radius")}px` }, { property: "box-shadow", value: `${n(p, "shadow-x")}px ${n(p, "shadow-y")}px ${n(p, "shadow-blur")}px ${n(p, "shadow-spread")}px ${t(p, "shadow-color")}` }] });
   program.items.forEach((item, index) => {
     const activation = item.activationFrame === undefined ? null : item.activationFrame - program.outer.frames.start;
     const duration = program.outer.frames.end - program.outer.frames.start;

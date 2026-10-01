@@ -32,7 +32,7 @@ export function assembleMediaProgram(timeline: Timeline, canvas: Canvas, plan: M
         else if (l.kind === "media") { const media = inputs.media[l.sourceIndex]; if (!media) throw new DvError("MEDIA_SOURCE", "Missing media."); source = { kind: "media", media }; }
         else { const surface = inputs.surfaces[l.sourceIndex]; if (!surface) throw new DvError("MEDIA_SOURCE", "Missing Surface."); source = { kind: "surface", surface }; }
         validateSource(source, timeline);
-        const direct = u.layers.length === 1 && l.id === "content";
+        const direct = u.sourceForm === "direct";
         const resolved = parseAppearance(`${g.id}/${u.id}/${l.id}`, frame, l.properties, !direct);
         const timing = source.kind === "media" ? source.media : source.kind === "surface" && source.surface.timing.kind === "frames" ? source.surface.timing : undefined;
         if (!timing && (l.properties.playback !== undefined || l.properties["trim-start"] !== undefined || l.properties["trim-end"] !== undefined)) throw new DvError("MEDIA_STILL_PLAYBACK", "Still images cannot specify playback or source-frame trim.");

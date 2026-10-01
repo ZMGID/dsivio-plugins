@@ -57,3 +57,21 @@ test("Program setup can measure mounted text and its draw overrides descendant t
     for(const frame of captured.frames)assert.deepEqual(await sharp(store.pathOf(frame.resource)).removeAlpha().raw().toBuffer(),expected);
   }finally{await rm(root,{recursive:true,force:true});}
 });
+test("Descendant visible styles and program draws cannot escape Present lifetime or visible windows",{skip},async()=>{
+  const root=await mkdtemp(join(tmpdir(),"dv-present-gate-"));const store=new ProjectStore(root);const ctx={buildId:"test",commandKey:"test",idempotencyKey:"test",projectRoot:root,workDir:join(root,"work"),store,signal:new AbortController().signal,log() {}};
+  try {
+    const nodes:VisualNode[]=[["lifetime","8px","#00ff00","#00ff00"],["gapped","72px","#ff0000","#0000ff"]].map(([nodeKey,left,first,last])=>({kind:"program",nodeKey:nodeKey!,parentKey:null,order:0,attributes:[],keyframes:[],style:[{property:"position",value:"absolute"},{property:"left",value:left!},{property:"top",value:"8px"}],program:{format:"dsivio-video.browser-program/1",html:'<div class="paint" style="width:32px;height:32px;visibility:visible"></div>',css:".paint{visibility:visible}",setup:'const paint=root.querySelector(".paint");return frame=>{paint.style.visibility="visible";paint.style.backgroundColor=frame>=2?data.last:data.first;};',data:{first:first!,last:last!},resources:[]}}));
+    const scene=composition([nodes[0]!]);const present=scene.visualTracks[0]!.presents[0]!;
+    scene.visualTracks[0]!.presents=[
+      {...present,lifetime:{start:1,end:2}},
+      {...present,presentKey:"gapped",layer:1,layerKey:"gapped",lifetime:{start:0,end:3},visible:[{start:0,end:1},{start:2,end:3}],rootKey:nodes[1]!.nodeKey,nodes:[nodes[1]!]},
+    ];
+    const captured=await captureFrames({input:{kind:"document",document:compileDocument(scene)},frames:[0,1,2]},ctx);
+    const expected=[[[16,32,48],[255,0,0]],[[0,255,0],[16,32,48]],[[16,32,48],[0,0,255]]];
+    for(const frame of captured.frames){
+      const data=await sharp(store.pathOf(frame.resource)).removeAlpha().raw().toBuffer();
+      const pixel=(x:number)=>[...data.subarray((10*128+x)*3,(10*128+x)*3+3)];
+      assert.deepEqual([pixel(10),pixel(74)],expected[frame.frame]);
+    }
+  }finally{await rm(root,{recursive:true,force:true});}
+});

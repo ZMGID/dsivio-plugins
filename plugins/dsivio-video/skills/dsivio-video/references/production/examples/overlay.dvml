@@ -1,0 +1,20 @@
+<?dvml using="dsivio-video/markup@1"?>
+<dvml>
+  <import as="time" from="dsivio-video/time@1"/>
+  <import as="space" from="dsivio-video/space@1"/>
+  <import as="overlay" from="dsivio-video/screen-overlay@1"/>
+  <import as="film" from="dsivio-video/film@1"/>
+  <import as="render" from="dsivio-video/render@1"/>
+  <import as="look" source="./look.dvs"/>
+  <space:Canvas id="canvas" width="640" height="360"/>
+  <time:Timeline id="timeline" frame-rate="30" end="90f"/>
+  <overlay:Track id="effects" canvas={canvas} timeline={timeline}>
+    <overlay:ColorWash id="wash" z="10" during="program" color="#236C9C" opacity="0.5"/>
+    <overlay:Bokeh id="lights" z="20" during="program" amount="0.8" min-size="18" max-size="54" color="#FFD99A" warmth="0.3" drift="25" seed="7"/>
+    <overlay:Flash id="beat" z="30" at="30f" for="12f" color="#FFFFFF" intensity="0.6" attack="2" hold="2" decay="8"/>
+  </overlay:Track>
+  <film:Film id="movie" canvas={canvas} timeline={timeline} appearance={look.film.base}>
+    <film:Track source={effects.track}/>
+  </film:Film>
+  <render:Video id="final" composition={movie.composition} timeline={timeline}/>
+</dvml>

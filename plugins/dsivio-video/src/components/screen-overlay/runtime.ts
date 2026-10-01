@@ -1,3 +1,20 @@
+import type { OverlayOptions } from "./types.ts";
+
+/** Pure seeded geometry, serialized unchanged into the trusted browser program. */
+export function createBokehGeometry(width: number, height: number, options: OverlayOptions["Bokeh"], random: () => number) {
+  const pieces = [];
+  for (let index = 0; index < Math.max(1, Math.round(options.amount * 48)); index++) {
+    pieces.push({
+      x: random() * width,
+      y: random() * height,
+      radius: (options["min-size"] + random() * (options["max-size"] - options["min-size"])) / 2,
+      alpha: 0.1 + random() * 0.35,
+      velocity: random() * 2 - 1,
+    });
+  }
+  return pieces;
+}
+
 /** Trusted browser code. Layout is seeded once; every seek clears and redraws from the local frame alone. */
 export const OVERLAY_SETUP = String.raw`
 const canvas = root.querySelector('canvas');
@@ -22,11 +39,7 @@ if (kind === 'GlitchVeil') for (let i = 0; i < o.bars; i++) pieces.push({
   alpha: 0.25 + random() * 0.75, velocity: random() * 2 - 1,
   color: o.colors[Math.floor(random() * o.colors.length)]
 });
-if (kind === 'Bokeh') for (let i = 0; i < Math.round(o.amount * 80); i++) pieces.push({
-  x: random() * w, y: random() * h,
-  radius: (o['min-size'] + random() * (o['max-size'] - o['min-size'])) / 2,
-  alpha: 0.1 + random() * 0.35, velocity: random() * 2 - 1
-});
+if (kind === 'Bokeh') pieces.push(...(${createBokehGeometry.toString()})(w, h, o, random));
 if (kind === 'LightLeak') for (const color of o.colors) pieces.push({
   x: random() * w, y: random() * h, radius: diagonal * (0.2 + random() * 0.3),
   angle: (o.angle + (random() * 2 - 1) * 20) * Math.PI / 180, color

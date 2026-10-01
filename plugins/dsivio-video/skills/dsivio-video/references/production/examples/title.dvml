@@ -1,0 +1,27 @@
+<?dvml using="dsivio-video/markup@1"?>
+<dvml>
+  <import as="time" from="dsivio-video/time@1"/>
+  <import as="space" from="dsivio-video/space@1"/>
+  <import as="fonts" from="dsivio-video/fonts@1"/>
+  <import as="typo" from="dsivio-video/typo@1"/>
+  <import as="film" from="dsivio-video/film@1"/>
+  <import as="render" from="dsivio-video/render@1"/>
+  <import as="look" source="./look.dvs"/>
+  <space:Canvas id="canvas" width="640" height="360"/>
+  <space:Frame id="title-box" within={canvas} left="30px" top="40px" right="610px" bottom="320px"/>
+  <time:Timeline id="timeline" frame-rate="30" end="90f"/>
+  <fonts:Face id="face" family="noto-sans-sc" weight="700" style="normal"/>
+  <fonts:Stack id="font" font={face}/>
+  <typo:Style id="style" recipe={look.typo.title} font={font}/>
+  <typo:Motion id="entrance">
+    <typo:ItemKeyframe at="0" opacity="0" y="24"/>
+    <typo:ItemKeyframe at="12" opacity="1" y="0" easing="ease-out"/>
+  </typo:Motion>
+  <typo:Track id="titles" timeline={timeline}>
+    <typo:Area id="headline" placement={title-box} style={style} motion={entrance} during="program">把空间留给重点</typo:Area>
+  </typo:Track>
+  <film:Film id="movie" canvas={canvas} timeline={timeline} appearance={look.film.base}>
+    <film:Track source={titles.track}/>
+  </film:Film>
+  <render:Video id="final" composition={movie.composition} timeline={timeline}/>
+</dvml>

@@ -1,5 +1,3 @@
-状态：按第 3 阶段设计编写，实现合并后需核对 vocabulary
-
 # 按内容归属选择三种基础轨道
 
 呈现 Timeline 的画面/声音或独立文字时读。Timeline 不会自动送画面和声音进入 Film，必须明确选择贡献。
@@ -52,4 +50,4 @@ typo:Style 必填 id/recipe/font；Track 必填 id/timeline；Area 必填 id/pla
 
 ## 核对实际贡献
 
-performance 公开 .visual，sound 公开 .audio，typo 公开 .track；不要互换端口。基础文字不是 captions；排名、贴纸、字幕与其他组件在第 4 阶段补充，不用当前元素伪称已实现专用行为。
+performance 公开 .visual，sound 公开 .audio，typo 公开 .track；不要互换端口。独立文字不是词级字幕。详见 [performance](performance.md)、[sound](sound.md)、[typography](typography.md)；字幕用 [caption-fine](caption-fine.md)，覆盖素材用 [media-track](media-track.md)，配乐用 [audio-track](audio-track.md)。其他专用组件由 Skill 路由，不把普通文字冒充排名或贴纸。

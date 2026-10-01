@@ -18,7 +18,7 @@ function ease(p,kind){
 }
 return frame=>{
  const p=data.properties;let opacity=1,y=0,scale=1,rotation=p.rotation;
- const enter=Math.min(data.frames,p['enter-frames']),exit=Math.min(data.frames,p['exit-frames']);
+ const enter=p.enter==='none'?0:Math.min(data.frames,p['enter-frames']),exit=p.exit==='none'?0:Math.min(data.frames,p['exit-frames']);
  if(p.enter!=='none'&&enter>0&&frame<enter){const q=ease(frame/enter,p['enter-easing']);opacity=Math.max(0,Math.min(1,q));if(p.enter==='pop'||p.enter==='slide-pop'){scale=p['enter-start-scale']+(1-p['enter-start-scale'])*q;rotation+=p['enter-rotation-delta']*(1-q);}if(p.enter==='slide-pop')y+=p['enter-offset-y']*(1-q);}
  const endStart=Math.max(enter,data.frames-exit);
  if(p.exit!=='none'&&exit>0&&frame>=endStart){const q=ease((frame-endStart)/Math.max(1,data.frames-endStart),p['exit-easing']);opacity*=1-Math.max(0,Math.min(1,q));if(p.exit==='fade-up')y+=p['exit-offset-y']*q;}

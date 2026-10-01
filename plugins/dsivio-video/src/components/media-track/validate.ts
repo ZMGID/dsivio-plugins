@@ -48,8 +48,9 @@ function layer(data: unknown): asserts data is LayerPlan {
   if (l.sampling.length) { const first = object(l.sampling[0], ["at", "zoom", "x", "y", "rotate"], ["easing"]), last = object(l.sampling.at(-1), ["at", "zoom", "x", "y", "rotate"], ["easing"]); if (first.at !== 0 || last.at !== 1) throw new DvError("MEDIA_SAMPLING", "Sampling must cover both edges."); }
 }
 function unit(data: unknown): asserts data is UnitPlan {
-  const u = object(data, ["id", "layers", "audioGain"], ["properties", "sourceAudio", "instant"]); identity(u.id); finite(u.audioGain, 0, 64); list(u.layers); if (u.properties !== undefined) properties(u.properties);
-  if (!u.layers.length) throw new DvError("MEDIA_SOURCE", "Unit requires at least one layer.");
+  const u = object(data, ["id", "sourceForm", "layers", "audioGain"], ["properties", "sourceAudio", "instant"]); identity(u.id); finite(u.audioGain, 0, 64); list(u.layers); if (u.properties !== undefined) properties(u.properties);
+  if (!u.layers.length || u.sourceForm !== "direct" && u.sourceForm !== "layers") throw new DvError("MEDIA_SOURCE", "Unit requires layers and an explicit source form.");
+  if (u.sourceForm === "direct" && (u.layers.length !== 1 || object(u.layers[0], ["id", "kind", "sourceIndex", "properties", "sampling"], ["extentIndex"]).kind === "paint")) throw new DvError("MEDIA_SOURCE", "Direct form requires exactly one non-paint source.");
   const ids = new Set<string>(); for (const l of u.layers) { layer(l); if (ids.has(l.id)) throw new DvError("MEDIA_DUPLICATE", "Duplicate Layer identity."); ids.add(l.id); }
   if (u.sourceAudio !== undefined) { identity(u.sourceAudio); if (!u.layers.some(l => { layer(l); return l.id === u.sourceAudio && l.kind === "media"; })) throw new DvError("MEDIA_AUDIO", "Unknown audio layer."); }
 }

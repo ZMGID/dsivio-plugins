@@ -27,11 +27,12 @@ async function fixture(t:test.TestContext){
  const value=await executor.run({faceKey:"regression-sc",family:"noto-sans-sc",weight:400,style:"normal"},{projectRoot:dir,buildId:"test",commandKey:"font",idempotencyKey:"font",workDir:dir,store,signal:new AbortController().signal,log:()=>{}});
  const face=value.data as unknown as FontFace;
  const browser=await puppeteer.launch({executablePath:location.path,headless:true,args:["--no-sandbox"]});t.after(()=>browser.close());
- async function pageFor(kind:"path"|"area",color:boolean,ellipsis=false){
+ async function pageFor(kind:"path"|"area",color:boolean,ellipsis=false,grapheme=false){
   const timeline:Timeline={axisKey:"test-axis",clock:{fps:{numerator:30,denominator:1}},totalFrames:60,placements:[]};
   const style=typographyStyle("style",{rule:"typo.test",properties:{"stack-order":1,size:48,fill:"#FFFFFF",wrap:"none"}},face,{paints:[{kind:"stroke",widthPx:2,placement:"outside",ink:{kind:"solid",color:"#000000"}}],axes:[],features:[],decorations:[]});
   if(ellipsis){style.layout.overflow="ellipsis";style.layout.maxLines=3;style.layout.wrap="word";}
-  const program=assembleTypography(timeline,{trackKey:"track",items:[{itemKey:"item",windowIndex:0,styleIndex:0,placement:{kind,index:0},content:{kind:"text",textIndex:0}}]},[projectWindow(timeline,{kind:"during",source:"program"},"item")],[style],[],[],[{canvasKey:"canvas",rect:{xPx:40,yPx:40,widthPx:540,heightPx:ellipsis?180:160}}],[{canvasKey:"canvas",start:{xPx:40,yPx:160},segments:[{kind:"line",to:{xPx:580,yPx:160}}]}],[ellipsis?"A long comment should remain readable and show an ellipsis at the end of the third line ".repeat(6):"可见"]);
+  if(grapheme)style.layout.wrap="grapheme";
+  const program=assembleTypography(timeline,{trackKey:"track",items:[{itemKey:"item",windowIndex:0,styleIndex:0,placement:{kind,index:0},content:{kind:"text",textIndex:0}}]},[projectWindow(timeline,{kind:"during",source:"program"},"item")],[style],[],[],[{canvasKey:"canvas",rect:{xPx:40,yPx:40,widthPx:grapheme?140:540,heightPx:ellipsis||grapheme?180:160}}],[{canvasKey:"canvas",start:{xPx:40,yPx:160},segments:[{kind:"line",to:{xPx:580,yPx:160}}]}],[grapheme?"abcdefghijklmno":ellipsis?"A long comment should remain readable and show an ellipsis at the end of the third line ".repeat(6):"可见"]);
   if(color)program.items[0]!.content.sequences=[{sequenceKey:"color",unit:"grapheme",units:{start:0,end:2},startFrame:0,durationFrames:30,staggerFrames:0,cycles:1,order:"forward",poses:[{progress:0,easing:"linear",declarations:[{property:"opacity",value:"1"}]},{progress:1,easing:"linear",declarations:[{property:"opacity",value:"1"},{property:"color",value:"#FF0000"}]}]}];
   const track=lowerTypography(program);if(kind==="path")track.presents[0]!.lifetime={start:10,end:20};
   const document=compileDocument({compositionKey:"test",canvasKey:"canvas",extent:{widthPx:640,heightPx:240},domain:{axisKey:timeline.axisKey,clock:timeline.clock,totalFrames:60,totalSamples48k:96000},background:"#101820",visualTracks:[track],audioTracks:[]});
@@ -81,5 +82,25 @@ test("transformed fixed-area word wrapping retains complete words and a visible 
   const vocabulary=new Set("A long comment should remain readable and show an ellipsis at the end of the third line".split(" "));
   for(const line of lines.slice(0,2))for(const word of line.trim().split(/\s+/))assert.equal(vocabulary.has(word),true);
   assert.equal(await page.evaluate("document.querySelector('[data-dv-ellipsis=true]').childNodes[0].textContent"),"…");
+ }finally{await page.close();}
+});
+
+test("painted grapheme wrapping fits a continuous word into a narrow Area without losing text",async t=>{
+ const f=await fixture(t);if(!f)return;const page=await f.pageFor("area",false,false,true);
+ try{
+  const geometry=await page.evaluate(()=>{
+   const run=document.querySelector("[data-run]")!,root=run.parentElement!.parentElement!.parentElement!,bounds=root.getBoundingClientRect();
+   const walker=document.createTreeWalker(run,NodeFilter.SHOW_TEXT,{acceptNode(node){return node.parentElement?.closest("svg")?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}});
+   const tops=new Set<number>();let text="",inside=true,node:Node|null;
+   while((node=walker.nextNode())){
+    const value=node.textContent||"";text+=value;
+    for(let index=0;index<value.length;index++){
+     const range=document.createRange();range.setStart(node,index);range.setEnd(node,index+1);const rect=range.getBoundingClientRect();
+     tops.add(Math.round(rect.top));inside&&=rect.left>=bounds.left-.5&&rect.right<=bounds.right+.5;
+    }
+   }
+   return{text,rows:tops.size,inside};
+  });
+  assert.equal(geometry.text,"abcdefghijklmno");assert.equal(geometry.rows>1,true);assert.equal(geometry.inside,true);
  }finally{await page.close();}
 });

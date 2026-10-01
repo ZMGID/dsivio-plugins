@@ -438,6 +438,8 @@ F 是唯一集成 owner：其他包向 F 提供默认 ModuleDef 和 `localCapabi
 | `media:Video` 作为 Normalize 的来源时，本阶段验收用已有素材，不重新付费生成 | 验收不花钱 |
 | studio 模式的 snapshot（`--studio`）需要第 5 阶段的 Studio 服务，本阶段只验证了 HTML 输入 | Studio 在第 5 阶段 |
 | ASR 服务接收不在允许根目录内的音频时，客户端先把同样的字节暂存到系统临时目录 | macOS 的 `/tmp` 与系统临时目录不同 |
+| Present 的寿命与可见窗口用私有包裹层的 `display:none` 控制（不只是 `visibility`），子节点即使写 `visibility: visible` 也不会在寿命外出现；文字挂载和 program setup 仍在首次 seek 前完成 | 第 3、4 阶段审查都发现子节点 `visibility: visible` 越出寿命的同类问题，从结构上堵住 |
+| `wrap: grapheme` 时文字运行时按字素生成排版单元，复杂描边/渐变也能在单词内部换行；`wrap: word` 保持整词 | 窄字幕里长词不再溢出 |
 
 ### 11.2 实测结果
 

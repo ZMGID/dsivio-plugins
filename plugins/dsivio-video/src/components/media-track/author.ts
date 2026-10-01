@@ -69,9 +69,9 @@ export function decodeMediaTrack(node: ElementNode | RawElement, ctx: Elaboratio
     if (kind === "image") p.extentIndex = add(a, e, "extent", "extents", spaceTypes.extent); else if (a.extent) ctx.fail("MEDIA_EXTENT", "Only image sources accept extent.", e.span); return p;
   }
   function unit(e: ElementNode, a: Record<string, Attribute>, parent: string, unitId: string, inherited: Record<string, Json>, directProperties: Record<string, Json>): UnitPlan {
-    const p: UnitPlan = { id: unitId, layers: [], properties: directProperties, audioGain: a["audio-gain"] ? Number(literal(a, "audio-gain", e, ctx)) : 1 }; finite(p.audioGain, 0, 64);
-    if (a["source-audio"]) { p.sourceAudio = literal(a, "source-audio", e, ctx); plan.hasAudio = true; } else if (a["audio-gain"]) ctx.fail("MEDIA_AUDIO", "audio-gain requires source-audio.", e.span);
     const direct = ["image", "media", "surface"].some(k => a[k]);
+    const p: UnitPlan = { id: unitId, sourceForm: direct ? "direct" : "layers", layers: [], properties: directProperties, audioGain: a["audio-gain"] ? Number(literal(a, "audio-gain", e, ctx)) : 1 }; finite(p.audioGain, 0, 64);
+    if (a["source-audio"]) { p.sourceAudio = literal(a, "source-audio", e, ctx); plan.hasAudio = true; } else if (a["audio-gain"]) ctx.fail("MEDIA_AUDIO", "audio-gain requires source-audio.", e.span);
     if (tag(e) === "Member" && children(e).some(c => tag(c) === "Sound")) ctx.fail("MEDIA_CHILD", "Member cannot contain Sound.", e.span);
     const contentChildren = children(e).filter(c => tag(c) !== "Sound");
     if (direct) { if (contentChildren.some(c => tag(c) !== "Sampling")) ctx.fail("MEDIA_SOURCE", "Direct source and Paint/Layer cannot mix.", e.span); const fake: ElementNode = { ...e, children: contentChildren }; p.layers.push(source(fake, a, "content", directProperties)); }

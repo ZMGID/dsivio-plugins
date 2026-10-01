@@ -1,5 +1,3 @@
-状态：按第 3 阶段设计编写，实现合并后需核对 vocabulary
-
 # 渲染并检查实际成片
 
 交付全片/区间、查布局或验收时读。资源准备归 [local-tools](../environment/local-tools.md)，提交规则归 [builds](../authoring/builds.md)。

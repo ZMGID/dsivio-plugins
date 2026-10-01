@@ -19,7 +19,7 @@ description: 根据创作 Brief、参考视频或用户素材制作并修改视�
 
 让模型负责人物、场景、表演和镜头内运动。把准确文字、品牌事实、几何排版及可编辑时间事件留在作者工程。多个参考分别提供身份、产品、场景或动作，不把无关参考一股脑加入请求。
 
-第 3 阶段的 Timeline、轨道、Film、render 和 snapshot 参考按设计编写；使用前查询当前 `vocabulary` 和命令帮助。组件专页在第 4 阶段补充，不猜不存在的元素。
+Timeline、基础轨道、Film、渲染与所有已实现组件均有核对当前 vocabulary 的专页。先按职责路由，再读准确属性；matting / background-removal 尚不可用，只导入预抠透明媒体。不要猜不存在的元素。
 
 ## 按当前需要准备环境
 
@@ -81,5 +81,12 @@ Claude Code / Codex 中使用同一套作者文件与 CLI。当前付费生成�
 | 画面、声音、独立文字贡献 | [production/tracks.md](references/production/tracks.md) |
 | Film 的画布与显式装配 | [production/film.md](references/production/film.md) |
 | 成片、区间渲染与 snapshot 验收 | [production/rendering.md](references/production/rendering.md) |
-| Captions、caption tracking、ranking、stickers、卡片及其他组件专页 | 第 4 阶段补充；不创建占位接口 |
+| 字幕显示 / 隐藏、角色、逐词高亮及测量跟踪 | [production/caption.md](references/production/caption.md)、[caption-fine.md](references/production/caption-fine.md) |
+| Timeline 表演画面、原声、独立文字 | [production/performance.md](references/production/performance.md)、[sound.md](references/production/sound.md)、[typography.md](references/production/typography.md) |
+| B-roll / 素材替换、独立音乐与音效 | [production/media-track.md](references/production/media-track.md)、[audio-track.md](references/production/audio-track.md) |
+| 卡片堆与累计排名 | [production/deck-track.md](references/production/deck-track.md)、[ranking.md](references/production/ranking.md) |
+| 评论卡、采访答案揭示、全屏覆盖 | [production/comment-sticker.md](references/production/comment-sticker.md)、[interview-emoji-reveal.md](references/production/interview-emoji-reveal.md)、[screen-overlay.md](references/production/screen-overlay.md) |
+| 静图合成、裁切 / 调色 / 编码、透明主体 | [production/image-compose.md](references/production/image-compose.md)、[image-transform.md](references/production/image-transform.md)、[matting.md](references/production/matting.md) |
+| 参考改编、口播采访、产品、排名、播客 / 讲解 | [playbooks/index.md](references/playbooks/index.md)（Format 与 Craft 可组合） |
+| 无成本本地动画、完整 Source/Recipe/Run 与执行记录 | [production/examples/README.md](references/production/examples/README.md) |
 | 核查本文命令/属性的定义与阶段 | [interface-evidence.md](references/interface-evidence.md) |

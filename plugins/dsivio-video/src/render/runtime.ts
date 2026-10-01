@@ -51,7 +51,13 @@ function pageRuntime() {
   win.__dvSeekFrame=(frame:number)=>{
     try {
       if(!Number.isSafeInteger(frame)||frame<0||frame>=data.totalFrames)throw new Error("Seek outside integer program frame domain");
-      for(const p of data.presents){const active=frame>=p.lifetime.start&&frame<p.lifetime.end&&(p.visible===undefined||p.visible.some(w=>frame>=w.start&&frame<w.end));document.getElementById(p.id)!.style.visibility=active?"visible":"hidden";}
+      for(const p of data.presents){
+        const active=frame>=p.lifetime.start&&frame<p.lifetime.end&&(p.visible===undefined||p.visible.some(w=>frame>=w.start&&frame<w.end));
+        const present=document.getElementById(p.id)!;
+        // Descendant visibility cannot override this private lifetime/window boundary.
+        present.style.display=active?"":"none";
+        present.style.visibility=active?"visible":"hidden";
+      }
       for(const a of animations)a.animation.currentTime=Math.min(a.duration,Math.max(0,frame-a.start))*1000*data.clock.fps.denominator/data.clock.fps.numerator;
       for(const d of drawers){const result:unknown=d.draw(Math.min(d.duration,Math.max(0,frame-d.start)));if(result&&typeof result==="object"&&"then" in result&&typeof result.then==="function")throw new Error("Program draw must be synchronous");}
       win.__dvSeekError=null;
